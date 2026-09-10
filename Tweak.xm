@@ -2,6 +2,7 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <Network/Network.h>
 
 static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
@@ -11,6 +12,7 @@ static BOOL g_isAuthed = NO;
 static id g_settingsVC = nil;
 
 static void showActivationAlert(void);
+static void triggerLocalNetworkPrompt(void);
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
@@ -23,14 +25,12 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
     if (orig_addSubview) ((void(*)(id,SEL,id))orig_addSubview)(self, _cmd, view);
 }
 
-// Block ALL native Login popups
 static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *vc, BOOL animated, void (^completion)(void)) {
     if ([vc isKindOfClass:[UIAlertController class]]) {
         UIAlertController *alert = (UIAlertController *)vc;
         NSString *title = alert.title;
         
         if (title && [title containsString:@"Login"]) {
-            // Block it, show our activation instead
             dispatch_async(dispatch_get_main_queue(), ^{
                 showActivationAlert();
             });
@@ -83,24 +83,37 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
 }
 @end
 
+// Trigger iOS Local Network permission prompt
+static void triggerLocalNetworkPrompt(void) {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        // Create a dummy connection to trigger the prompt
+        nw_endpoint_t endpoint = nw_endpoint_create_host("224.0.0.1", "9999");
+        nw_parameters_t params = nw_parameters_create_udp();
+        nw_connection_t conn = nw_connection_create(endpoint, params);
+        
+        nw_connection_set_queue(conn, dispatch_get_main_queue());
+        nw_connection_start(conn);
+        
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            nw_connection_cancel(conn);
+        });
+    });
+}
+
 static void doDirectLogin(NSString *key) {
-    // Get the login API
     Class apiClass = NSClassFromString(@"iCdfsIdfdEdfsNdfdftqWer");
     if (!apiClass) return;
     
     id api = ((id(*)(id,SEL))objc_msgSend)(apiClass, @selector(sharedInstance));
     ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setUrl:), @"https://v.fembabe.org");
     
-    // Create settings VC
     Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
     g_settingsVC = [[vcClass alloc] init];
     ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setServer:), @"https://v.fembabe.org");
     ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setUsername:), key);
     ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setPassword:), key);
     
-    // Present the VC first
     [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:^{
-        // Make HTTP request directly using NSURLSession
         NSURL *url = [NSURL URLWithString:@"https://v.fembabe.org/api/vcam/login2"];
         NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
         request.HTTPMethod = @"POST";
@@ -115,11 +128,12 @@ static void doDirectLogin(NSString *key) {
                 if (data && !error) {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if ([json[@"ok"] boolValue]) {
-                        // Success - call loggedin on the VC
                         ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
                         g_isAuthed = YES;
+                        
+                        // Trigger local network prompt for iOS 18
+                        triggerLocalNetworkPrompt();
                     } else {
-                        // Failed
                         NSString *errMsg = json[@"error"] ?: @"Invalid key";
                         ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), errMsg);
                     }
@@ -160,6 +174,11 @@ static void showActivationAlert(void) {
     if (m2) orig_addSubview = method_setImplementation(m2, (IMP)hook_addSubview);
     Method m3 = class_getInstanceMethod([UIViewController class], @selector(presentViewController:animated:completion:));
     if (m3) orig_presentVC = method_setImplementation(m3, (IMP)hook_presentVC);
+    
+    // Trigger local network prompt early on iOS 18
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        triggerLocalNetworkPrompt();
+    });
     
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         @autoreleasepool {
