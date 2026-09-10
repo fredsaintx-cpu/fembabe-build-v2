@@ -1,4 +1,4 @@
-// FemBabe iOS-18 Overlay v25 - Correct method calls from Frida dump
+// FemBabe iOS-18 Overlay v25 - Correct login flow
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -13,8 +13,10 @@ static UIWindow *g_presentWin = nil;
 
 @implementation FBButton
 
-- (void)triggerLogin:(NSString *)key {
-    // Get settings VC class
+- (void)doLogin:(NSString *)key {
+    if (key.length == 0) return;
+    
+    // Get or create settings VC
     Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
     if (!settingsClass) {
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Error" message:@"Settings class not found" preferredStyle:UIAlertControllerStyleAlert];
@@ -23,11 +25,9 @@ static UIWindow *g_presentWin = nil;
         return;
     }
     
-    // Create instance
     id vc = [[settingsClass alloc] init];
-    if (!vc) return;
     
-    // Set username and password (both are the key)
+    // Set username and password to the key
     if ([vc respondsToSelector:@selector(setUsername:)]) {
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
     }
@@ -35,21 +35,13 @@ static UIWindow *g_presentWin = nil;
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
     }
     
-    // Call login method
+    // Call login
     if ([vc respondsToSelector:@selector(login)]) {
         ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
     }
     
-    // Also try to show float window directly
-    Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
-    if (vcamClass) {
-        id shared = ((id(*)(id,SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
-        if (shared && [shared respondsToSelector:@selector(setFloatWindow:)]) {
-            ((void(*)(id,SEL,BOOL))objc_msgSend)(shared, @selector(setFloatWindow:), YES);
-        }
-    }
-    
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Logging in..." message:@"Wait for camera panel" preferredStyle:UIAlertControllerStyleAlert];
+    // Show feedback
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Logging in..." message:@"Please wait" preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
     [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
 }
@@ -72,7 +64,7 @@ static UIWindow *g_presentWin = nil;
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) ws = self;
     [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act) {
-        [ws triggerLogin:alert.textFields.firstObject.text];
+        [ws doLogin:alert.textFields.firstObject.text];
     }]];
     [g_presentWin.rootViewController presentViewController:alert animated:YES completion:nil];
 }
