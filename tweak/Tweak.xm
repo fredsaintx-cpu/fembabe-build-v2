@@ -2,85 +2,39 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <AudioToolbox/AudioToolbox.h>
-#import <notify.h>
-#import <sys/mman.h>
-#import <fcntl.h>
-
-#define NOTIFY_KEY "com.fembabe.vcam.state"
-#define STATE_FILE "/tmp/vcam_fembabe_state.bin"
-
-// State shared with daemon
-typedef struct {
-    uint8_t isConnected;
-    uint8_t isStreaming;
-    uint32_t frameCount;
-    char serverUrl[256];
-} VCamState;
 
 static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
-static IMP orig_isConnected = NULL;
 static IMP orig_setRtmp = NULL;
 static BOOL g_isAuthed = NO;
 static id g_settingsVC = nil;
-static int g_notifyToken = 0;
-static VCamState *g_state = NULL;
 
 static void showActivationAlert(void);
 
-// Map shared state from daemon
-static void mapSharedState(void) {
-    int fd = open(STATE_FILE, O_RDONLY);
-    if (fd < 0) return;
-    
-    g_state = (VCamState *)mmap(NULL, sizeof(VCamState), PROT_READ, MAP_SHARED, fd, 0);
-    close(fd);
-    
-    if (g_state == MAP_FAILED) g_state = NULL;
-}
-
-// Check if daemon is connected
-static BOOL isDaemonConnected(void) {
-    if (!g_state) mapSharedState();
-    return g_state ? (g_state->isConnected != 0) : NO;
-}
-
-// Hook isConnected - check daemon state
-static BOOL hook_isConnected(id self, SEL _cmd) {
-    if (isDaemonConnected()) return YES;
-    if (orig_isConnected) return ((BOOL(*)(id,SEL))orig_isConnected)(self, _cmd);
-    return NO;
-}
-
 // Hook setRtmp: to redirect to localhost proxy
 static void hook_setRtmp(id self, SEL _cmd, NSString *rtmpUrl) {
-    NSLog(@"[FemBabe] Original RTMP URL: %@", rtmpUrl);
+    NSLog(@"[FemBabe] Original RTMP: %@", rtmpUrl);
     
-    // Replace server with localhost proxy
-    if (rtmpUrl && [rtmpUrl hasPrefix:@"rtmp://"]) {
-        // Extract path after host
-        NSRange hostEnd = [rtmpUrl rangeOfString:@"/" options:0 range:NSMakeRange(7, rtmpUrl.length - 7)];
-        NSString *path = @"";
-        if (hostEnd.location != NSNotFound) {
-            path = [rtmpUrl substringFromIndex:hostEnd.location];
+    // Replace server with localhost (daemon proxies to real server)
+    if (rtmpUrl && [rtmpUrl containsString:@"rtmp://"]) {
+        // Extract path from URL, replace host with 127.0.0.1
+        NSRange hostStart = [rtmpUrl rangeOfString:@"rtmp://"];
+        if (hostStart.location != NSNotFound) {
+            NSString *afterScheme = [rtmpUrl substringFromIndex:hostStart.location + hostStart.length];
+            NSRange pathStart = [afterScheme rangeOfString:@"/"];
+            if (pathStart.location != NSNotFound) {
+                NSString *path = [afterScheme substringFromIndex:pathStart.location];
+                rtmpUrl = [NSString stringWithFormat:@"rtmp://127.0.0.1:1935%@", path];
+                NSLog(@"[FemBabe] Redirected to: %@", rtmpUrl);
+            }
         }
-        
-        // Redirect to localhost proxy
-        NSString *localUrl = [NSString stringWithFormat:@"rtmp://127.0.0.1:1935%@", path];
-        NSLog(@"[FemBabe] Redirected to: %@", localUrl);
-        
-        // Store original server for daemon
-        if (g_state) {
-            strncpy(g_state->serverUrl, rtmpUrl.UTF8String, 255);
-        }
-        
-        if (orig_setRtmp) ((void(*)(id,SEL,id))orig_setRtmp)(self, _cmd, localUrl);
-        return;
     }
     
-    if (orig_setRtmp) ((void(*)(id,SEL,id))orig_setRtmp)(self, _cmd, rtmpUrl);
+    if (orig_setRtmp) {
+        ((void(*)(id,SEL,id))orig_setRtmp)(self, _cmd, rtmpUrl);
+    }
 }
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
@@ -194,21 +148,11 @@ static void showActivationAlert(void) {
 }
 
 %ctor {
-    // Register for daemon state notifications
-    notify_register_check(NOTIFY_KEY, &g_notifyToken);
-    
-    // Map shared state
-    mapSharedState();
-    
-    // Hook vcam manager
+    // Hook setRtmp: on vcam manager to redirect to localhost proxy
     Class vcamMgr = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
     if (vcamMgr) {
-        Method m = class_getInstanceMethod(vcamMgr, @selector(isConnected));
-        if (m) orig_isConnected = method_setImplementation(m, (IMP)hook_isConnected);
-        
-        // Hook setRtmp: to redirect to localhost
-        Method mr = class_getInstanceMethod(vcamMgr, @selector(setRtmp:));
-        if (mr) orig_setRtmp = method_setImplementation(mr, (IMP)hook_setRtmp);
+        Method m = class_getInstanceMethod(vcamMgr, @selector(setRtmp:));
+        if (m) orig_setRtmp = method_setImplementation(m, (IMP)hook_setRtmp);
     }
     
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
