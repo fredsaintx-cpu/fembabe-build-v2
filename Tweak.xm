@@ -4,6 +4,18 @@
 #import <AudioToolbox/AudioToolbox.h>
 
 static UIWindow *overlayWindow = nil;
+static IMP orig_setTitle = NULL;
+
+// Hook function - hide B button
+static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
+    if (title && [title isEqualToString:@"B"]) {
+        self.hidden = YES;
+        return;
+    }
+    if (orig_setTitle) {
+        ((void(*)(id,SEL,id,UIControlState))orig_setTitle)(self, _cmd, title, state);
+    }
+}
 
 @interface FBPresentWindow : UIWindow
 @end
@@ -66,11 +78,16 @@ static UIWindow *overlayWindow = nil;
 }
 @end
 
-// NO B blocking here - fembabe_hook.dylib handles it
-
 %ctor {
-    @autoreleasepool {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    // HOOK FIRST - before anything else
+    Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
+    if (m) {
+        orig_setTitle = method_setImplementation(m, (IMP)hook_setTitle);
+    }
+    
+    // Then setup UI
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        @autoreleasepool {
             UIWindowScene *scene = nil;
             for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
                 if ([s isKindOfClass:[UIWindowScene class]] && s.activationState == UISceneActivationStateForegroundActive) {
@@ -96,6 +113,6 @@ static UIWindow *overlayWindow = nil;
             [btn addTarget:btn action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
             [btn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:btn action:@selector(handlePan:)]];
             [overlayWindow addSubview:btn];
-        });
-    }
+        }
+    });
 }
