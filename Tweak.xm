@@ -11,6 +11,10 @@ static NSString *g_pendingKey = nil;
 
 static void showActivationAlert(void);
 
+// Forward declaration for the Settings VC we're hooking
+@interface iMswGsfawYfewewUfdsmn : UIViewController
+@end
+
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
     if (orig_setTitle) ((void(*)(id,SEL,id,UIControlState))orig_setTitle)(self, _cmd, title, state);
@@ -45,10 +49,8 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
                 }
             }
             g_pendingKey = nil;
-            
-            // Call completion if provided
             if (completion) completion();
-            return; // Don't present the alert at all
+            return; // Don't present
         }
     }
     
@@ -71,7 +73,6 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
 
 @implementation FBButton
 - (void)handleTap { showActivationAlert(); }
-
 - (void)handlePan:(UIPanGestureRecognizer *)g {
     if (g.state == UIGestureRecognizerStateBegan) {
         self.dragStart = [g locationInView:overlayWindow];
@@ -119,7 +120,6 @@ static void showActivationAlert(void) {
 
 %hook iMswGsfawYfewewUfdsmn
 - (void)logout:(id)sender {
-    // Dismiss and show our activation alert
     [self dismissViewControllerAnimated:YES completion:^{
         showActivationAlert();
     }];
