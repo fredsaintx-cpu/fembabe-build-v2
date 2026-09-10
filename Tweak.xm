@@ -29,29 +29,37 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
         UIAlertController *alert = (UIAlertController *)vc;
         NSString *title = alert.title;
         
-        // Block ALL native Login popups - redirect to our activation
         if (title && [title containsString:@"Login"]) {
             if (g_pendingKey) {
-                // We have a pending key - fill and trigger
+                // Fill text field
                 if (alert.textFields.count > 0) {
                     alert.textFields[0].text = g_pendingKey;
                 }
-                for (UIAlertAction *action in alert.actions) {
-                    if (action.style == UIAlertActionStyleDefault) {
-                        void (^handler)(UIAlertAction *) = [action valueForKey:@"handler"];
-                        if (handler) handler(action);
-                        break;
+                
+                // Present it (required for handler to work), then immediately trigger and dismiss
+                ((void(*)(id,SEL,id,BOOL,id))orig_presentVC)(self, _cmd, vc, NO, ^{
+                    // Trigger confirm action
+                    for (UIAlertAction *action in alert.actions) {
+                        if (action.style == UIAlertActionStyleDefault) {
+                            void (^handler)(UIAlertAction *) = [action valueForKey:@"handler"];
+                            if (handler) handler(action);
+                            break;
+                        }
                     }
-                }
-                g_pendingKey = nil;
+                    // Dismiss immediately
+                    [vc dismissViewControllerAnimated:NO completion:nil];
+                    g_pendingKey = nil;
+                    if (completion) completion();
+                });
+                return;
             } else {
-                // No pending key (logout/error case) - show our activation instead
+                // No pending key - show our activation
                 dispatch_async(dispatch_get_main_queue(), ^{
                     showActivationAlert();
                 });
+                if (completion) completion();
+                return;
             }
-            if (completion) completion();
-            return; // Don't present native login
         }
     }
     
@@ -76,20 +84,16 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
 - (void)handleTap {
     AudioServicesPlaySystemSound(1519);
     
-    // If already authed, toggle the settings panel
     if (g_isAuthed && g_settingsVC) {
         UIViewController *presented = overlayWindow.rootViewController.presentedViewController;
         if (presented) {
-            // Panel is showing - hide it
             [presented dismissViewControllerAnimated:YES completion:nil];
         } else {
-            // Panel is hidden - show it
             [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:nil];
         }
         return;
     }
     
-    // Not authed - show activation alert
     showActivationAlert();
 }
 
@@ -129,7 +133,6 @@ static void showActivationAlert(void) {
         [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:^{
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                 ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(login));
-                // Mark as authed after login attempt
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                     g_isAuthed = YES;
                 });
