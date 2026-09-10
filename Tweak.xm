@@ -1,4 +1,5 @@
-// FemBabe iOS-18 Overlay v10b
+// FemBabe iOS-18 Overlay v11
+// SMOOTHER DRAG: Follow finger directly
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -9,7 +10,6 @@ static UIWindow *g_overlayWin = nil;
 static UIWindow *g_presentWin = nil;
 
 @interface FBButton : UIButton
-@property (nonatomic) CGPoint centerStart;
 @end
 
 @implementation FBButton
@@ -27,17 +27,14 @@ static UIWindow *g_presentWin = nil;
     UIViewController *loginVC = [[loginVCClass alloc] init];
     if (!loginVC) return;
     
-    // Check if logged in
     BOOL isLoggedIn = NO;
     if ([loginVC respondsToSelector:@selector(loggedin)]) {
         isLoggedIn = ((BOOL(*)(id, SEL))objc_msgSend)(loginVC, @selector(loggedin));
     }
     
     if (isLoggedIn) {
-        // Logged in - show settings
         [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:nil];
     } else {
-        // Not logged in - show VC then trigger login alert
         [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:^{
             if ([loginVC respondsToSelector:@selector(authLoginTapped)]) {
                 [loginVC performSelector:@selector(authLoginTapped)];
@@ -49,20 +46,23 @@ static UIWindow *g_presentWin = nil;
     [h impactOccurred];
 }
 
+// SMOOTH DRAG: Directly follow finger position
 - (void)handlePan:(UIPanGestureRecognizer *)g {
     UIWindow *win = g_overlayWin;
     if (!win) return;
-    CGPoint translation = [g translationInView:nil];
-    if (g.state == UIGestureRecognizerStateBegan) {
-        _centerStart = win.center;
-    } else if (g.state == UIGestureRecognizerStateChanged) {
-        CGPoint newCenter = CGPointMake(_centerStart.x + translation.x, _centerStart.y + translation.y);
-        CGRect screen = [UIScreen mainScreen].bounds;
-        newCenter.x = MAX(25, MIN(screen.size.width - 25, newCenter.x));
-        newCenter.y = MAX(50, MIN(screen.size.height - 25, newCenter.y));
-        win.center = newCenter;
-    }
+    
+    // Get finger position in screen coordinates
+    CGPoint finger = [g locationInView:nil];
+    
+    // Clamp to screen bounds (keep button fully visible)
+    CGRect screen = [UIScreen mainScreen].bounds;
+    finger.x = MAX(25, MIN(screen.size.width - 25, finger.x));
+    finger.y = MAX(60, MIN(screen.size.height - 25, finger.y));
+    
+    // Directly set window center to finger position - no lag
+    win.center = finger;
 }
+
 @end
 
 @interface FBPresentWindow : UIWindow
