@@ -1,9 +1,8 @@
 Package: com.fembabe.overlay
 Name: FemBabe Overlay
 Version: 1.1.8-ios18
-Architecture: iphoneos-arm
+Architecture: iphoneos-arm64
 Description: FemBabe iOS 18 Overlay
 Maintainer: FemBabe
 Author: FemBabe
 Section: Tweaks
-Depends: mobilesubstrate
