@@ -5,114 +5,119 @@
 
 static UIWindow *overlayWindow = nil;
 static UIButton *floatButton = nil;
-static UITextField *keyField = nil;
-static UIView *activationPanel = nil;
 
-static void doLogin(NSString *key) {
-    Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-    if (!settingsClass) return;
-    
-    id vc = [[settingsClass alloc] init];
-    ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
-    ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
-    ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
-    
-    // Hide our panel
-    activationPanel.hidden = YES;
-    [keyField resignFirstResponder];
-    
-    // Present the Settings VC so user can see the native UI and tap Login
-    [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
-        // After presented, call login
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-            ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
-        });
-    }];
-    
+@interface FBPresentWindow : UIWindow
+@end
+
+@implementation FBPresentWindow
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *hit = [super hitTest:point withEvent:event];
+    if (hit == self || hit == self.rootViewController.view) return nil;
+    return hit;
+}
+@end
+
+@interface FBButton : UIButton
+@property (nonatomic) CGPoint dragStart;
+@property (nonatomic) CGPoint winStart;
+@end
+
+@implementation FBButton
+
+- (void)handleTap {
     AudioServicesPlaySystemSound(1519);
-}
-
-static void showActivationPanel(void) {
-    if (!activationPanel) {
-        activationPanel = [[UIView alloc] initWithFrame:CGRectMake(40, 200, 300, 150)];
-        activationPanel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.95];
-        activationPanel.layer.cornerRadius = 12;
-        
-        keyField = [[UITextField alloc] initWithFrame:CGRectMake(15, 20, 270, 44)];
-        keyField.placeholder = @"Enter activation key";
-        keyField.backgroundColor = [UIColor whiteColor];
-        keyField.layer.cornerRadius = 8;
-        keyField.textAlignment = NSTextAlignmentCenter;
-        keyField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
-        [activationPanel addSubview:keyField];
-        
-        UIButton *activateBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-        activateBtn.frame = CGRectMake(15, 80, 130, 50);
-        [activateBtn setTitle:@"Activate" forState:UIControlStateNormal];
-        [activateBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        activateBtn.backgroundColor = [UIColor purpleColor];
-        activateBtn.layer.cornerRadius = 8;
-        [activateBtn addTarget:floatButton action:@selector(activateTapped) forControlEvents:UIControlEventTouchUpInside];
-        [activationPanel addSubview:activateBtn];
-        
-        UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-        closeBtn.frame = CGRectMake(155, 80, 130, 50);
-        [closeBtn setTitle:@"Close" forState:UIControlStateNormal];
-        [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        closeBtn.backgroundColor = [UIColor darkGrayColor];
-        closeBtn.layer.cornerRadius = 8;
-        [closeBtn addTarget:floatButton action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-        [activationPanel addSubview:closeBtn];
-        
-        [overlayWindow addSubview:activationPanel];
+    
+    // Get Settings VC class
+    Class loginClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+    if (!loginClass) {
+        NSLog(@"[FemBabe] Login VC class not found!");
+        return;
     }
-    activationPanel.hidden = NO;
-    [keyField becomeFirstResponder];
+    
+    // Create instance
+    id loginVC = [[loginClass alloc] init];
+    if (!loginVC) {
+        NSLog(@"[FemBabe] Failed to create login VC!");
+        return;
+    }
+    
+    // Set server
+    if ([loginVC respondsToSelector:@selector(setServer:)]) {
+        [loginVC performSelector:@selector(setServer:) withObject:@"https://v.fembabe.org"];
+    }
+    
+    NSLog(@"[FemBabe] Presenting login...");
+    
+    // Present the Settings VC
+    [overlayWindow.rootViewController presentViewController:loginVC animated:YES completion:nil];
 }
 
-@interface FBFloatButton : UIButton
+- (void)handlePan:(UIPanGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        self.dragStart = [gesture locationInView:overlayWindow];
+        self.winStart = self.center;
+    }
+    CGPoint loc = [gesture locationInView:overlayWindow];
+    CGFloat dx = loc.x - self.dragStart.x;
+    CGFloat dy = loc.y - self.dragStart.y;
+    self.center = CGPointMake(self.winStart.x + dx, self.winStart.y + dy);
+}
+
 @end
 
-@implementation FBFloatButton
-- (void)floatTapped { AudioServicesPlaySystemSound(1519); showActivationPanel(); }
-- (void)activateTapped {
-    NSString *key = keyField.text;
-    if (key.length > 0) { doLogin(key); }
-}
-- (void)closeTapped { [keyField resignFirstResponder]; activationPanel.hidden = YES; }
-- (void)handlePan:(UIPanGestureRecognizer *)g {
-    CGPoint t = [g translationInView:overlayWindow];
-    self.center = CGPointMake(self.center.x + t.x, self.center.y + t.y);
-    [g setTranslation:CGPointZero inView:overlayWindow];
-}
-@end
-
+// Block B button
 static IMP origSetTitle = NULL;
 static void blockB(id self, SEL _cmd, NSString *title, UIControlState state) {
-    if ([title isEqualToString:@"B"]) { [self setHidden:YES]; return; }
+    if ([title isEqualToString:@"B"]) {
+        [self setHidden:YES];
+        return;
+    }
     ((void(*)(id,SEL,NSString*,UIControlState))origSetTitle)(self, _cmd, title, state);
 }
 
 %ctor {
-    Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
-    if (m) origSetTitle = method_setImplementation(m, (IMP)blockB);
-    
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        overlayWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
-        overlayWindow.windowLevel = UIWindowLevelAlert + 100;
-        overlayWindow.backgroundColor = [UIColor clearColor];
-        overlayWindow.hidden = NO;
-        overlayWindow.rootViewController = [UIViewController new];
+    @autoreleasepool {
+        // Hook B button
+        Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
+        if (m) origSetTitle = method_setImplementation(m, (IMP)blockB);
         
-        floatButton = [[FBFloatButton alloc] initWithFrame:CGRectMake(20, 100, 50, 50)];
-        floatButton.backgroundColor = [UIColor purpleColor];
-        [floatButton setTitle:@"F" forState:UIControlStateNormal];
-        [floatButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        floatButton.titleLabel.font = [UIFont boldSystemFontOfSize:22];
-        floatButton.layer.cornerRadius = 25;
-        [floatButton addTarget:floatButton action:@selector(floatTapped) forControlEvents:UIControlEventTouchUpInside];
-        [floatButton addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:floatButton action:@selector(handlePan:)]];
-        [overlayWindow addSubview:floatButton];
-        [overlayWindow makeKeyAndVisible];
-    });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            // Get window scene
+            UIWindowScene *scene = nil;
+            for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+                if ([s isKindOfClass:[UIWindowScene class]] && s.activationState == UISceneActivationStateForegroundActive) {
+                    scene = (UIWindowScene *)s;
+                    break;
+                }
+            }
+            if (!scene) return;
+            
+            // Create overlay window
+            overlayWindow = [[FBPresentWindow alloc] initWithWindowScene:scene];
+            overlayWindow.frame = [UIScreen mainScreen].bounds;
+            overlayWindow.windowLevel = UIWindowLevelAlert + 100;
+            overlayWindow.backgroundColor = [UIColor clearColor];
+            overlayWindow.rootViewController = [[UIViewController alloc] init];
+            overlayWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
+            overlayWindow.hidden = NO;
+            
+            // Create purple F button
+            floatButton = [[FBButton alloc] initWithFrame:CGRectMake(20, 100, 50, 50)];
+            floatButton.backgroundColor = [UIColor purpleColor];
+            [floatButton setTitle:@"F" forState:UIControlStateNormal];
+            [floatButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+            floatButton.titleLabel.font = [UIFont boldSystemFontOfSize:24];
+            floatButton.layer.cornerRadius = 25;
+            floatButton.clipsToBounds = YES;
+            
+            [floatButton addTarget:floatButton action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
+            
+            UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:floatButton action:@selector(handlePan:)];
+            [floatButton addGestureRecognizer:pan];
+            
+            [overlayWindow addSubview:floatButton];
+            
+            NSLog(@"[FemBabe] Overlay ready!");
+        });
+    }
 }
