@@ -1,5 +1,5 @@
-// FemBabe iOS-18 Overlay v21
-// Direct API activation + B-block (no Logos)
+// FemBabe iOS-18 Overlay v22
+// Direct API + notify camera app
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
@@ -13,6 +13,45 @@ static UIWindow *g_presentWin = nil;
 
 @implementation FBButton
 
+- (void)notifyCameraLoggedIn:(NSDictionary *)loginData withKey:(NSString *)key {
+    // Get the main vcam manager
+    Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
+    if (vcamClass) {
+        id shared = [vcamClass performSelector:@selector(sharedInstance)];
+        if (shared) {
+            // Try to set login state
+            @try { [shared setValue:@YES forKey:@"loggedIn"]; } @catch(NSException *e) {}
+            @try { [shared setValue:@YES forKey:@"isLoggedIn"]; } @catch(NSException *e) {}
+            @try { [shared setValue:loginData[@"license"] forKey:@"license"]; } @catch(NSException *e) {}
+            @try { [shared setValue:loginData[@"licenseSig"] forKey:@"licenseSig"]; } @catch(NSException *e) {}
+            @try { [shared setValue:loginData[@"sPub"] forKey:@"sPub"]; } @catch(NSException *e) {}
+            @try { [shared setValue:loginData[@"encConfig"] forKey:@"encConfig"]; } @catch(NSException *e) {}
+            
+            // Try calling login method
+            if ([shared respondsToSelector:@selector(setLoggedIn:)]) {
+                [shared performSelector:@selector(setLoggedIn:) withObject:@YES];
+            }
+            if ([shared respondsToSelector:@selector(onLoginSuccess:)]) {
+                [shared performSelector:@selector(onLoginSuccess:) withObject:loginData];
+            }
+            if ([shared respondsToSelector:@selector(handleLoginResponse:)]) {
+                [shared performSelector:@selector(handleLoginResponse:) withObject:loginData];
+            }
+        }
+    }
+    
+    // Also try the settings VC class
+    Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+    if (settingsClass) {
+        id vc = [[settingsClass alloc] init];
+        @try { [vc setValue:@YES forKey:@"loggedin"]; } @catch(NSException *e) {}
+        @try { [vc setValue:key forKey:@"username"]; } @catch(NSException *e) {}
+        if ([vc respondsToSelector:@selector(loginSuccess)]) {
+            [vc performSelector:@selector(loginSuccess)];
+        }
+    }
+}
+
 - (void)activateWithKey:(NSString *)key {
     if (key.length == 0) {
         UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Error" message:@"Enter a key" preferredStyle:UIAlertControllerStyleAlert];
@@ -24,6 +63,7 @@ static UIWindow *g_presentWin = nil;
     UIAlertController *loading = [UIAlertController alertControllerWithTitle:@"Activating..." message:nil preferredStyle:UIAlertControllerStyleAlert];
     [g_presentWin.rootViewController presentViewController:loading animated:YES completion:nil];
     
+    // Step 1: Activate
     NSURL *url = [NSURL URLWithString:@"https://v.fembabe.org/api/vcam/activate"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
@@ -31,31 +71,64 @@ static UIWindow *g_presentWin = nil;
     NSDictionary *body = @{@"username": key, @"key": key, @"devicePub": @""};
     req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
     
+    __weak typeof(self) weakSelf = self;
     [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [loading dismissViewControllerAnimated:YES completion:^{
-                if (err) {
-                    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Error" message:err.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+        if (err || !data) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [loading dismissViewControllerAnimated:YES completion:^{
+                    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Error" message:err.localizedDescription ?: @"Network error" preferredStyle:UIAlertControllerStyleAlert];
                     [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
                     [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
-                    return;
-                }
-                NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                if ([json[@"ok"] boolValue]) {
+                }];
+            });
+            return;
+        }
+        
+        NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+        if (![json[@"ok"] boolValue]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [loading dismissViewControllerAnimated:YES completion:^{
+                    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Failed" message:json[@"error"] ?: @"Activation failed" preferredStyle:UIAlertControllerStyleAlert];
+                    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                    [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
+                }];
+            });
+            return;
+        }
+        
+        // Step 2: Login2
+        NSURL *url2 = [NSURL URLWithString:@"https://v.fembabe.org/api/vcam/login2"];
+        NSMutableURLRequest *req2 = [NSMutableURLRequest requestWithURL:url2];
+        req2.HTTPMethod = @"POST";
+        [req2 setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+        NSDictionary *body2 = @{@"userId": key, @"username": key, @"devicePub": @""};
+        req2.HTTPBody = [NSJSONSerialization dataWithJSONObject:body2 options:0 error:nil];
+        
+        [[[NSURLSession sharedSession] dataTaskWithRequest:req2 completionHandler:^(NSData *data2, NSURLResponse *resp2, NSError *err2) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [loading dismissViewControllerAnimated:YES completion:^{
+                    NSDictionary *loginData = nil;
+                    if (data2) {
+                        loginData = [NSJSONSerialization JSONObjectWithData:data2 options:0 error:nil];
+                    }
+                    
+                    // Save to UserDefaults
                     [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"FemBabeActivated"];
                     [[NSUserDefaults standardUserDefaults] setObject:key forKey:@"FemBabeKey"];
+                    if (loginData) {
+                        [[NSUserDefaults standardUserDefaults] setObject:loginData forKey:@"FemBabeLoginData"];
+                    }
                     [[NSUserDefaults standardUserDefaults] synchronize];
-                    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"✓ Activated!" message:@"FemBabe is ready" preferredStyle:UIAlertControllerStyleAlert];
+                    
+                    // Notify camera app
+                    [weakSelf notifyCameraLoggedIn:loginData ?: @{} withKey:key];
+                    
+                    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"✓ Activated!" message:@"Tap F again to open camera settings" preferredStyle:UIAlertControllerStyleAlert];
                     [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
                     [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
-                } else {
-                    NSString *e = json[@"error"] ?: @"Failed";
-                    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Failed" message:e preferredStyle:UIAlertControllerStyleAlert];
-                    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                    [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
-                }
-            }];
-        });
+                }];
+            });
+        }] resume];
     }] resume];
 }
 
@@ -68,6 +141,25 @@ static UIWindow *g_presentWin = nil;
         return;
     }
     
+    // Check if already activated - show camera settings
+    if ([[NSUserDefaults standardUserDefaults] boolForKey:@"FemBabeActivated"]) {
+        Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
+        if (vcamClass) {
+            id shared = [vcamClass performSelector:@selector(sharedInstance)];
+            if ([shared respondsToSelector:@selector(setFloatWindow:)]) {
+                [shared performSelector:@selector(setFloatWindow:) withObject:@YES];
+            }
+            if ([shared respondsToSelector:@selector(showSettings)]) {
+                [shared performSelector:@selector(showSettings)];
+            }
+            if ([shared respondsToSelector:@selector(toggleSettings)]) {
+                [shared performSelector:@selector(toggleSettings)];
+            }
+        }
+        return;
+    }
+    
+    // Show login UI
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe Login" message:nil preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
         tf.placeholder = @"Activation Key";
