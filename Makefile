@@ -1,8 +1,14 @@
 ARCHS = arm64 arm64e
 TARGET := iphone:clang:latest:15.0
+INSTALL_TARGET_PROCESSES = SpringBoard
+
 include $(THEOS)/makefiles/common.mk
-TWEAK_NAME = fembabe_overlay
+
+LIBRARY_NAME = fembabe_overlay
+
 fembabe_overlay_FILES = Tweak.xm
-fembabe_overlay_FRAMEWORKS = UIKit
 fembabe_overlay_CFLAGS = -fobjc-arc
-include $(THEOS_MAKE_PATH)/tweak.mk
+fembabe_overlay_FRAMEWORKS = UIKit Foundation
+fembabe_overlay_EXTRA_FRAMEWORKS = 
+
+include $(THEOS_MAKE_PATH)/library.mk
