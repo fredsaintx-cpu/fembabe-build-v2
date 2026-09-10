@@ -6,7 +6,7 @@
 static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
-static id g_settingsVC = nil;
+static NSString *g_pendingKey = nil;
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
@@ -17,6 +17,48 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
     Class orangeClass = NSClassFromString(@"iHsfaTkdhwkzopQfsnwBd");
     if (orangeClass && [view isKindOfClass:orangeClass]) { view.hidden = YES; return; }
     if (orig_addSubview) ((void(*)(id,SEL,id))orig_addSubview)(self, _cmd, view);
+}
+
+// Hook UIAlertController to auto-fill and auto-confirm the native login popup
+static IMP orig_presentVC = NULL;
+static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *vc, BOOL animated, void (^completion)(void)) {
+    // Check if this is the native login alert
+    if ([vc isKindOfClass:[UIAlertController class]] && g_pendingKey) {
+        UIAlertController *alert = (UIAlertController *)vc;
+        NSString *title = alert.title;
+        
+        // If it's the Login alert from camera
+        if (title && [title containsString:@"Login"]) {
+            // Fill the text field with our key
+            if (alert.textFields.count > 0) {
+                alert.textFields[0].text = g_pendingKey;
+            }
+            
+            // Present it, then auto-tap Confirm after short delay
+            ((void(*)(id,SEL,id,BOOL,id))orig_presentVC)(self, _cmd, vc, animated, ^{
+                if (completion) completion();
+                
+                // Find and trigger the Confirm action
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    for (UIAlertAction *action in alert.actions) {
+                        if (action.style == UIAlertActionStyleDefault) {
+                            // Trigger the action handler
+                            void (^handler)(UIAlertAction *) = [action valueForKey:@"handler"];
+                            if (handler) {
+                                handler(action);
+                            }
+                            [vc dismissViewControllerAnimated:YES completion:nil];
+                            break;
+                        }
+                    }
+                    g_pendingKey = nil;
+                });
+            });
+            return;
+        }
+    }
+    
+    ((void(*)(id,SEL,id,BOOL,id))orig_presentVC)(self, _cmd, vc, animated, completion);
 }
 
 @interface FBPresentWindow : UIWindow
@@ -51,28 +93,22 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
         NSString *key = alert.textFields.firstObject.text;
         if (key.length == 0) return;
         
-        // Get login API and set URL
-        Class apiClass = NSClassFromString(@"iCdfsIdfdEdfsNdfdftqWer");
-        if (!apiClass) return;
+        // Store key for auto-fill
+        g_pendingKey = [key copy];
         
-        id api = ((id(*)(id,SEL))objc_msgSend)(apiClass, @selector(sharedInstance));
-        ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setUrl:), @"https://v.fembabe.org");
-        
-        // Create Settings VC for the callback
+        // Create and present Settings VC
         Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-        g_settingsVC = [[vcClass alloc] init];
-        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setServer:), @"https://v.fembabe.org");
+        id vc = [[vcClass alloc] init];
+        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
+        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
+        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
         
-        // Call login API directly with VC as callback target
-        // login:password:callback: expects the VC to have loggedin and loginError: methods
-        ((void(*)(id,SEL,id,id,id))objc_msgSend)(api, @selector(login:password:callback:), key, key, g_settingsVC);
-        
-        // Present the VC after a delay to show results
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1000*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-            if (g_settingsVC) {
-                [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:nil];
-            }
-        });
+        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
+            // Call login - will show native popup which we auto-confirm
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
+            });
+        }];
     }]];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
@@ -94,6 +130,10 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
     if (m1) orig_setTitle = method_setImplementation(m1, (IMP)hook_setTitle);
     Method m2 = class_getInstanceMethod([UIView class], @selector(addSubview:));
     if (m2) orig_addSubview = method_setImplementation(m2, (IMP)hook_addSubview);
+    
+    // Hook presentViewController to intercept native login popup
+    Method m3 = class_getInstanceMethod([UIViewController class], @selector(presentViewController:animated:completion:));
+    if (m3) orig_presentVC = method_setImplementation(m3, (IMP)hook_presentVC);
     
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         @autoreleasepool {
