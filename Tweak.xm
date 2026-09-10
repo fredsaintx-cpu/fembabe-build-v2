@@ -8,47 +8,35 @@ static UIButton *floatButton = nil;
 static UITextField *keyField = nil;
 static UIView *activationPanel = nil;
 
-typedef void (^LoginCallback)(id result);
-
 static void doLogin(NSString *key) {
+    // Save key
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"FemBabeActivated"];
+    [[NSUserDefaults standardUserDefaults] setObject:key forKey:@"FemBabeKey"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+    
+    // Get login API and call without callback
     Class loginAPIClass = NSClassFromString(@"iCdfsIdfdEdfsNdfdftqWer");
-    if (!loginAPIClass) return;
-    
-    id instance = ((id(*)(Class, SEL))objc_msgSend)(loginAPIClass, @selector(sharedInstance));
-    if (!instance) return;
-    
-    ((void(*)(id, SEL, id))objc_msgSend)(instance, @selector(setUrl:), @"https://v.fembabe.org");
-    
-    LoginCallback callback = ^(id result) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"FemBabeActivated"];
-            [[NSUserDefaults standardUserDefaults] setObject:key forKey:@"FemBabeKey"];
-            [[NSUserDefaults standardUserDefaults] synchronize];
+    if (loginAPIClass) {
+        id instance = ((id(*)(Class, SEL))objc_msgSend)(loginAPIClass, @selector(sharedInstance));
+        if (instance) {
+            ((void(*)(id, SEL, id))objc_msgSend)(instance, @selector(setUrl:), @"https://v.fembabe.org");
             
-            if (activationPanel) activationPanel.hidden = YES;
-            
-            Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
-            if (vcamClass) {
-                id vcam = ((id(*)(Class, SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
-                ((void(*)(id, SEL, BOOL))objc_msgSend)(vcam, @selector(setFloatWindow:), YES);
-                ((void(*)(id, SEL, BOOL))objc_msgSend)(vcam, @selector(setLive:), YES);
-            }
-            
-            Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-            if (settingsClass) {
-                id vc = [[settingsClass alloc] init];
-                ((void(*)(id, SEL, id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
-                ((void(*)(id, SEL, id))objc_msgSend)(vc, @selector(setUsername:), key);
-                ((void(*)(id, SEL, id))objc_msgSend)(vc, @selector(setPassword:), key);
-                ((void(*)(id, SEL))objc_msgSend)(vc, @selector(loggedin));
-            }
-            
-            AudioServicesPlaySystemSound(1519);
-        });
-    };
+            // Call login without callback - just fire and forget
+            SEL loginSel = NSSelectorFromString(@"login:password:callback:");
+            ((void(*)(id, SEL, id, id, id))objc_msgSend)(instance, loginSel, key, key, nil);
+        }
+    }
     
-    SEL loginSel = NSSelectorFromString(@"login:password:callback:");
-    ((void(*)(id, SEL, id, id, id))objc_msgSend)(instance, loginSel, key, key, callback);
+    // Also set vcam state
+    Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
+    if (vcamClass) {
+        id vcam = ((id(*)(Class, SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
+        ((void(*)(id, SEL, BOOL))objc_msgSend)(vcam, @selector(setFloatWindow:), YES);
+    }
+    
+    // Hide panel and vibrate
+    if (activationPanel) activationPanel.hidden = YES;
+    AudioServicesPlaySystemSound(1519);
 }
 
 static void showActivationPanel() {
