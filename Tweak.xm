@@ -1,4 +1,5 @@
-// FemBabe iOS-18 Overlay v9 FIXED
+// FemBabe iOS-18 Overlay v10
+// FIX: Don't show white settings VC - call login directly
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
@@ -6,6 +7,7 @@
 
 static UIWindow *g_overlayWin = nil;
 static UIWindow *g_presentWin = nil;
+static UIViewController *g_loginVC = nil;
 
 @interface FBButton : UIButton
 @property (nonatomic) CGPoint centerStart;
@@ -14,19 +16,43 @@ static UIWindow *g_presentWin = nil;
 @implementation FBButton
 
 - (void)handleTap {
+    // If we have a presented VC, dismiss it
     if (g_presentWin.rootViewController.presentedViewController) {
         [g_presentWin.rootViewController dismissViewControllerAnimated:YES completion:nil];
         UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [h impactOccurred];
+        g_loginVC = nil;
         return;
     }
     
+    // Get the login/settings VC class
     Class loginVCClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
     if (!loginVCClass) return;
+    
+    // Create instance
     UIViewController *loginVC = [[loginVCClass alloc] init];
     if (!loginVC) return;
+    g_loginVC = loginVC;
     
-    [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:nil];
+    // Check if logged in by looking for a "loggedin" property/method
+    BOOL isLoggedIn = NO;
+    if ([loginVC respondsToSelector:@selector(loggedin)]) {
+        isLoggedIn = ((BOOL(*)(id, SEL))objc_msgSend)(loginVC, @selector(loggedin));
+    }
+    
+    if (isLoggedIn) {
+        // Already logged in - show the settings VC (white screen is fine here)
+        [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:nil];
+    } else {
+        // NOT logged in - present VC but immediately trigger login alert
+        [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:^{
+            // Call authLoginTapped to show the login alert
+            if ([loginVC respondsToSelector:@selector(authLoginTapped)]) {
+                [loginVC performSelector:@selector(authLoginTapped)];
+            }
+        }];
+    }
+    
     UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [h impactOccurred];
 }
@@ -56,19 +82,6 @@ static UIWindow *g_presentWin = nil;
     return nil;
 }
 @end
-
-// FIXED: Proper function pointer type
-static IMP orig_viewWillAppear = NULL;
-static void hook_viewWillAppear(id self, SEL _cmd, BOOL animated) {
-    if (orig_viewWillAppear) {
-        ((void(*)(id, SEL, BOOL))orig_viewWillAppear)(self, _cmd, animated);
-    }
-    if ([self respondsToSelector:@selector(authLoginTapped)]) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            [self performSelector:@selector(authLoginTapped)];
-        });
-    }
-}
 
 static IMP orig_setTitle = NULL;
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
@@ -128,12 +141,6 @@ __attribute__((constructor)) static void init(void) {
     @autoreleasepool {
         Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
         orig_setTitle = method_setImplementation(m, (IMP)hook_setTitle);
-        
-        Class loginClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-        if (loginClass) {
-            Method vwa = class_getInstanceMethod(loginClass, @selector(viewWillAppear:));
-            if (vwa) orig_viewWillAppear = method_setImplementation(vwa, (IMP)hook_viewWillAppear);
-        }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); });
     }
 }
