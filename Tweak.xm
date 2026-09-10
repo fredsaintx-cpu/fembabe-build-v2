@@ -1,61 +1,32 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
+#import <AudioToolbox/AudioToolbox.h>
 
 static UIWindow *overlayWindow = nil;
 static UIButton *floatButton = nil;
 static UITextField *keyField = nil;
 static UIView *activationPanel = nil;
 
-// Get key window helper
-static UIWindow* getKeyWindow() {
-    NSArray *scenes = [[UIApplication sharedApplication] connectedScenes].allObjects;
-    for (id scene in scenes) {
-        if ([scene activationState] == 0) continue;
-        id delegate = [scene delegate];
-        if ([delegate respondsToSelector:@selector(window)]) {
-            return [delegate window];
-        }
-    }
-    return nil;
-}
-
-// Login callback block type
 typedef void (^LoginCallback)(id result);
 
 static void doLogin(NSString *key) {
-    // Get the login API class
     Class loginAPIClass = NSClassFromString(@"iCdfsIdfdEdfsNdfdftqWer");
-    if (!loginAPIClass) {
-        NSLog(@"[FemBabe] Login API class not found");
-        return;
-    }
+    if (!loginAPIClass) return;
     
-    // Get shared instance
     id instance = ((id(*)(Class, SEL))objc_msgSend)(loginAPIClass, @selector(sharedInstance));
-    if (!instance) {
-        NSLog(@"[FemBabe] Could not get login API instance");
-        return;
-    }
+    if (!instance) return;
     
-    // Set URL
     ((void(*)(id, SEL, id))objc_msgSend)(instance, @selector(setUrl:), @"https://v.fembabe.org");
     
-    // Create callback block
     LoginCallback callback = ^(id result) {
-        NSLog(@"[FemBabe] Login callback result: %@", result);
-        
         dispatch_async(dispatch_get_main_queue(), ^{
-            // Save activation state
             [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"FemBabeActivated"];
             [[NSUserDefaults standardUserDefaults] setObject:key forKey:@"FemBabeKey"];
             [[NSUserDefaults standardUserDefaults] synchronize];
             
-            // Hide activation panel
-            if (activationPanel) {
-                activationPanel.hidden = YES;
-            }
+            if (activationPanel) activationPanel.hidden = YES;
             
-            // Try to show the float window
             Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
             if (vcamClass) {
                 id vcam = ((id(*)(Class, SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
@@ -63,7 +34,6 @@ static void doLogin(NSString *key) {
                 ((void(*)(id, SEL, BOOL))objc_msgSend)(vcam, @selector(setLive:), YES);
             }
             
-            // Also call loggedin on Settings VC
             Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
             if (settingsClass) {
                 id vc = [[settingsClass alloc] init];
@@ -73,16 +43,12 @@ static void doLogin(NSString *key) {
                 ((void(*)(id, SEL))objc_msgSend)(vc, @selector(loggedin));
             }
             
-            // Vibrate for feedback
             AudioServicesPlaySystemSound(1519);
         });
     };
     
-    // Call login:password:callback:
     SEL loginSel = NSSelectorFromString(@"login:password:callback:");
     ((void(*)(id, SEL, id, id, id))objc_msgSend)(instance, loginSel, key, key, callback);
-    
-    NSLog(@"[FemBabe] Login called for key: %@", key);
 }
 
 static void showActivationPanel() {
@@ -150,26 +116,20 @@ static void showActivationPanel() {
 - (void)handlePan:(UIPanGestureRecognizer *)gesture {
     CGPoint translation = [gesture translationInView:overlayWindow];
     CGPoint newCenter = CGPointMake(self.center.x + translation.x, self.center.y + translation.y);
-    
     CGFloat halfWidth = self.bounds.size.width / 2;
     CGFloat halfHeight = self.bounds.size.height / 2;
     CGRect bounds = overlayWindow.bounds;
-    
     newCenter.x = MAX(halfWidth, MIN(newCenter.x, bounds.size.width - halfWidth));
     newCenter.y = MAX(halfHeight, MIN(newCenter.y, bounds.size.height - halfHeight));
-    
     self.center = newCenter;
     [gesture setTranslation:CGPointZero inView:overlayWindow];
 }
 
 @end
 
-// B Button blocking
 static IMP originalSetTitleForState = NULL;
 static void blockedSetTitle(id self, SEL _cmd, NSString *title, UIControlState state) {
-    if (title && [title isEqualToString:@"B"]) {
-        return;
-    }
+    if (title && [title isEqualToString:@"B"]) return;
     if (originalSetTitleForState) {
         ((void(*)(id, SEL, NSString*, UIControlState))originalSetTitleForState)(self, _cmd, title, state);
     }
@@ -177,11 +137,8 @@ static void blockedSetTitle(id self, SEL _cmd, NSString *title, UIControlState s
 
 %ctor {
     @autoreleasepool {
-        // Block B button
         Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
-        if (m) {
-            originalSetTitleForState = method_setImplementation(m, (IMP)blockedSetTitle);
-        }
+        if (m) originalSetTitleForState = method_setImplementation(m, (IMP)blockedSetTitle);
         
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             if (overlayWindow) return;
@@ -191,8 +148,6 @@ static void blockedSetTitle(id self, SEL _cmd, NSString *title, UIControlState s
             overlayWindow.backgroundColor = [UIColor clearColor];
             overlayWindow.userInteractionEnabled = YES;
             overlayWindow.hidden = NO;
-            
-            // Pass through touches except for our button
             overlayWindow.rootViewController = [UIViewController new];
             
             floatButton = [[FBFloatButton alloc] initWithFrame:CGRectMake(20, 100, 50, 50)];
