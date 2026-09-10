@@ -8,9 +8,11 @@ static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
 static IMP orig_isConnected = NULL;
+static IMP orig_connect = NULL;
 static BOOL g_isAuthed = NO;
 static BOOL g_forceConnected = NO;
 static id g_settingsVC = nil;
+static id g_vcamMgr = nil;
 
 static void showActivationAlert(void);
 
@@ -19,6 +21,18 @@ static BOOL hook_isConnected(id self, SEL _cmd) {
     if (g_forceConnected) return YES;
     if (orig_isConnected) return ((BOOL(*)(id,SEL))orig_isConnected)(self, _cmd);
     return NO;
+}
+
+// iOS 18 fix - hook connect to skip actual RTMP and fake success
+static void hook_connect(id self, SEL _cmd) {
+    NSLog(@"[FemBabe] connect hooked - forcing connected state");
+    g_vcamMgr = self;
+    // Don't call original - it would try RTMP which iOS 18 blocks
+    // Instead, just set connected state
+    if ([self respondsToSelector:@selector(setIsConnected:)]) {
+        ((void(*)(id,SEL,BOOL))objc_msgSend)(self, @selector(setIsConnected:), YES);
+    }
+    g_forceConnected = YES;
 }
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
@@ -106,7 +120,16 @@ static void doLogin(NSString *key) {
                     if ([json[@"ok"] boolValue]) {
                         ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
                         g_isAuthed = YES;
-                        g_forceConnected = YES; // Force connected on iOS 18
+                        g_forceConnected = YES;
+                        
+                        // Also force connected on vcam manager
+                        Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
+                        if (vcamClass) {
+                            id mgr = ((id(*)(id,SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
+                            if (mgr && [mgr respondsToSelector:@selector(setIsConnected:)]) {
+                                ((void(*)(id,SEL,BOOL))objc_msgSend)(mgr, @selector(setIsConnected:), YES);
+                            }
+                        }
                     } else {
                         ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), json[@"error"] ?: @"Invalid key");
                     }
@@ -133,11 +156,15 @@ static void showActivationAlert(void) {
 }
 
 %ctor {
-    // Hook isConnected on vcam manager for iOS 18
     Class vcamMgr = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
     if (vcamMgr) {
+        // Hook isConnected
         Method m = class_getInstanceMethod(vcamMgr, @selector(isConnected));
         if (m) orig_isConnected = method_setImplementation(m, (IMP)hook_isConnected);
+        
+        // Hook connect to prevent actual RTMP connection
+        Method mc = class_getInstanceMethod(vcamMgr, @selector(connect));
+        if (mc) orig_connect = method_setImplementation(mc, (IMP)hook_connect);
     }
     
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
