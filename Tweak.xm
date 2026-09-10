@@ -5,77 +5,39 @@
 
 static UIWindow *overlayWindow = nil;
 static UIButton *floatButton = nil;
-static UITextField *keyField = nil;
-static UIView *activationPanel = nil;
 
-static void doLogin(NSString *key) {
-    // Save key
-    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"FemBabeActivated"];
-    [[NSUserDefaults standardUserDefaults] setObject:key forKey:@"FemBabeKey"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
+static void showCameraSettings() {
+    Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+    if (!settingsClass) return;
     
-    // Get login API and call without callback
-    Class loginAPIClass = NSClassFromString(@"iCdfsIdfdEdfsNdfdftqWer");
-    if (loginAPIClass) {
-        id instance = ((id(*)(Class, SEL))objc_msgSend)(loginAPIClass, @selector(sharedInstance));
-        if (instance) {
-            ((void(*)(id, SEL, id))objc_msgSend)(instance, @selector(setUrl:), @"https://v.fembabe.org");
-            
-            // Call login without callback - just fire and forget
-            SEL loginSel = NSSelectorFromString(@"login:password:callback:");
-            ((void(*)(id, SEL, id, id, id))objc_msgSend)(instance, loginSel, key, key, nil);
+    id vc = [[settingsClass alloc] init];
+    ((void(*)(id, SEL, id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
+    
+    // Get root VC and present
+    UIWindow *keyWindow = nil;
+    for (UIWindowScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (scene.activationState == UISceneActivationStateForegroundActive) {
+            for (UIWindow *window in scene.windows) {
+                if (window.isKeyWindow) {
+                    keyWindow = window;
+                    break;
+                }
+            }
         }
     }
     
-    // Also set vcam state
-    Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
-    if (vcamClass) {
-        id vcam = ((id(*)(Class, SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
-        ((void(*)(id, SEL, BOOL))objc_msgSend)(vcam, @selector(setFloatWindow:), YES);
+    if (keyWindow && keyWindow.rootViewController) {
+        UIViewController *root = keyWindow.rootViewController;
+        while (root.presentedViewController) {
+            root = root.presentedViewController;
+        }
+        
+        UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
+        nav.modalPresentationStyle = UIModalPresentationFormSheet;
+        [root presentViewController:nav animated:YES completion:nil];
     }
     
-    // Hide panel and vibrate
-    if (activationPanel) activationPanel.hidden = YES;
     AudioServicesPlaySystemSound(1519);
-}
-
-static void showActivationPanel() {
-    if (!activationPanel) {
-        activationPanel = [[UIView alloc] initWithFrame:CGRectMake(50, 200, 280, 140)];
-        activationPanel.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.9];
-        activationPanel.layer.cornerRadius = 12;
-        
-        keyField = [[UITextField alloc] initWithFrame:CGRectMake(15, 20, 250, 40)];
-        keyField.placeholder = @"Enter activation key";
-        keyField.backgroundColor = [UIColor whiteColor];
-        keyField.layer.cornerRadius = 8;
-        keyField.textAlignment = NSTextAlignmentCenter;
-        keyField.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
-        keyField.autocorrectionType = UITextAutocorrectionTypeNo;
-        [activationPanel addSubview:keyField];
-        
-        UIButton *activateBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-        activateBtn.frame = CGRectMake(15, 75, 120, 44);
-        [activateBtn setTitle:@"Activate" forState:UIControlStateNormal];
-        [activateBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        activateBtn.backgroundColor = [UIColor colorWithRed:0.5 green:0 blue:0.5 alpha:1];
-        activateBtn.layer.cornerRadius = 8;
-        [activateBtn addTarget:floatButton action:@selector(activateTapped) forControlEvents:UIControlEventTouchUpInside];
-        [activationPanel addSubview:activateBtn];
-        
-        UIButton *closeBtn = [UIButton buttonWithType:UIButtonTypeSystem];
-        closeBtn.frame = CGRectMake(145, 75, 120, 44);
-        [closeBtn setTitle:@"Close" forState:UIControlStateNormal];
-        [closeBtn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-        closeBtn.backgroundColor = [UIColor darkGrayColor];
-        closeBtn.layer.cornerRadius = 8;
-        [closeBtn addTarget:floatButton action:@selector(closeTapped) forControlEvents:UIControlEventTouchUpInside];
-        [activationPanel addSubview:closeBtn];
-        
-        [overlayWindow addSubview:activationPanel];
-    }
-    activationPanel.hidden = NO;
-    [keyField becomeFirstResponder];
 }
 
 @interface FBFloatButton : UIButton
@@ -85,20 +47,7 @@ static void showActivationPanel() {
 
 - (void)floatTapped {
     AudioServicesPlaySystemSound(1519);
-    showActivationPanel();
-}
-
-- (void)activateTapped {
-    NSString *key = keyField.text;
-    if (key.length > 0) {
-        [keyField resignFirstResponder];
-        doLogin(key);
-    }
-}
-
-- (void)closeTapped {
-    [keyField resignFirstResponder];
-    activationPanel.hidden = YES;
+    showCameraSettings();
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)gesture {
