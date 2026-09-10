@@ -1,6 +1,8 @@
-// FemBabe iOS-18 Overlay v15 - SIMPLE
+// FemBabe iOS-18 Overlay v16
+// Clean login UI + working activation
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 #define FEMBABE_TAG 0xFE0BABE
 
@@ -13,35 +15,74 @@ static UIWindow *g_presentWin = nil;
 @implementation FBButton
 
 - (void)handleTap {
-    NSLog(@"[FemBabe] F tapped!");
-    
     UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [h impactOccurred];
     
-    // Dismiss if already showing
     if (g_presentWin.rootViewController.presentedViewController) {
-        NSLog(@"[FemBabe] Dismissing...");
         [g_presentWin.rootViewController dismissViewControllerAnimated:YES completion:nil];
         return;
     }
     
-    // Get the VC class
-    Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-    NSLog(@"[FemBabe] VC class: %@", vcClass);
-    if (!vcClass) return;
+    // Show clean login alert
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe Login"
+        message:@"Enter your activation key"
+        preferredStyle:UIAlertControllerStyleAlert];
     
-    // Create and present
-    UIViewController *vc = [[vcClass alloc] init];
-    NSLog(@"[FemBabe] VC instance: %@", vc);
-    if (!vc) return;
-    
-    NSLog(@"[FemBabe] Presenting...");
-    [g_presentWin.rootViewController presentViewController:vc animated:YES completion:^{
-        NSLog(@"[FemBabe] Presented! Calling authLoginTapped...");
-        if ([vc respondsToSelector:@selector(authLoginTapped)]) {
-            [vc performSelector:@selector(authLoginTapped)];
-        }
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"Activation Key";
+        tf.autocorrectionType = UITextAutocorrectionTypeNo;
+        tf.autocapitalizationType = UITextAutocapitalizationTypeNone;
     }];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    
+    [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *key = alert.textFields.firstObject.text;
+        if (key.length == 0) return;
+        
+        // Get the settings VC
+        Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+        if (!vcClass) return;
+        
+        id vc = [[vcClass alloc] init];
+        if (!vc) return;
+        
+        // Try to find and set the activation key text field
+        // Look for UITextField in the VC's view hierarchy
+        if ([vc isKindOfClass:[UIViewController class]]) {
+            UIViewController *viewController = (UIViewController *)vc;
+            [viewController loadViewIfNeeded];
+            
+            // Search for text fields
+            for (UIView *subview in viewController.view.subviews) {
+                if ([subview isKindOfClass:[UITextField class]]) {
+                    UITextField *tf = (UITextField *)subview;
+                    tf.text = key;
+                    break;
+                }
+            }
+            
+            // Also try setting via KVC if there's a property
+            @try {
+                [vc setValue:key forKey:@"activationKey"];
+            } @catch (NSException *e) {}
+            
+            @try {
+                [vc setValue:key forKey:@"keyField"];
+            } @catch (NSException *e) {}
+        }
+        
+        // Now call the activation method
+        if ([vc respondsToSelector:@selector(authActivateTapped)]) {
+            [vc performSelector:@selector(authActivateTapped)];
+        }
+        
+        // Show success feedback
+        UINotificationFeedbackGenerator *notif = [[UINotificationFeedbackGenerator alloc] init];
+        [notif notificationOccurred:UINotificationFeedbackTypeSuccess];
+    }]];
+    
+    [g_presentWin.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
@@ -100,8 +141,6 @@ static void buildOverlay(void) {
             return; 
         }
         
-        NSLog(@"[FemBabe] Building overlay with scene: %@", scene);
-        
         FBPresentWindow *pw = [[FBPresentWindow alloc] initWithWindowScene:scene];
         pw.frame = [UIScreen mainScreen].bounds;
         pw.windowLevel = UIWindowLevelAlert + 5000;
@@ -135,14 +174,11 @@ static void buildOverlay(void) {
         [vc.view addSubview:btn];
         ow.hidden = NO;
         g_overlayWin = ow;
-        
-        NSLog(@"[FemBabe] Overlay ready!");
     });
 }
 
 __attribute__((constructor)) static void init(void) {
     @autoreleasepool {
-        NSLog(@"[FemBabe] Init starting...");
         Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
         orig_setTitle = method_setImplementation(m, (IMP)hook_setTitle);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); });
