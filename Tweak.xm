@@ -1,13 +1,12 @@
-// FemBabe iOS-18 Overlay v10
-// FIX: Don't show white settings VC - call login directly
+// FemBabe iOS-18 Overlay v10b
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 #define FEMBABE_TAG 0xFE0BABE
 
 static UIWindow *g_overlayWin = nil;
 static UIWindow *g_presentWin = nil;
-static UIViewController *g_loginVC = nil;
 
 @interface FBButton : UIButton
 @property (nonatomic) CGPoint centerStart;
@@ -16,37 +15,30 @@ static UIViewController *g_loginVC = nil;
 @implementation FBButton
 
 - (void)handleTap {
-    // If we have a presented VC, dismiss it
     if (g_presentWin.rootViewController.presentedViewController) {
         [g_presentWin.rootViewController dismissViewControllerAnimated:YES completion:nil];
         UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [h impactOccurred];
-        g_loginVC = nil;
         return;
     }
     
-    // Get the login/settings VC class
     Class loginVCClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
     if (!loginVCClass) return;
-    
-    // Create instance
     UIViewController *loginVC = [[loginVCClass alloc] init];
     if (!loginVC) return;
-    g_loginVC = loginVC;
     
-    // Check if logged in by looking for a "loggedin" property/method
+    // Check if logged in
     BOOL isLoggedIn = NO;
     if ([loginVC respondsToSelector:@selector(loggedin)]) {
         isLoggedIn = ((BOOL(*)(id, SEL))objc_msgSend)(loginVC, @selector(loggedin));
     }
     
     if (isLoggedIn) {
-        // Already logged in - show the settings VC (white screen is fine here)
+        // Logged in - show settings
         [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:nil];
     } else {
-        // NOT logged in - present VC but immediately trigger login alert
+        // Not logged in - show VC then trigger login alert
         [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:^{
-            // Call authLoginTapped to show the login alert
             if ([loginVC respondsToSelector:@selector(authLoginTapped)]) {
                 [loginVC performSelector:@selector(authLoginTapped)];
             }
