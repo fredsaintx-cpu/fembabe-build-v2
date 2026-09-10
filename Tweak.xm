@@ -1,4 +1,4 @@
-// FemBabe iOS-18 Overlay v23 - Simplified
+// FemBabe iOS-18 Overlay v24 - Trigger camera's own login
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
@@ -12,36 +12,84 @@ static UIWindow *g_presentWin = nil;
 
 @implementation FBButton
 
-- (void)activateWithKey:(NSString *)key {
-    if (key.length == 0) return;
+- (void)triggerCameraLogin:(NSString *)key {
+    // Get the main vcam manager
+    Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
+    id shared = nil;
+    if (vcamClass && [vcamClass respondsToSelector:@selector(sharedInstance)]) {
+        shared = [vcamClass performSelector:@selector(sharedInstance)];
+    }
     
-    UIAlertController *loading = [UIAlertController alertControllerWithTitle:@"Activating..." message:nil preferredStyle:UIAlertControllerStyleAlert];
-    [g_presentWin.rootViewController presentViewController:loading animated:YES completion:nil];
+    // Try various login methods on the manager
+    if (shared) {
+        // Try direct login methods
+        SEL selectors[] = {
+            @selector(loginWithKey:),
+            @selector(activateWithKey:),
+            @selector(login:),
+            @selector(activate:),
+            @selector(setActivationKey:),
+            @selector(setKey:),
+            @selector(doLogin:),
+            @selector(performLogin:)
+        };
+        for (int i = 0; i < sizeof(selectors)/sizeof(selectors[0]); i++) {
+            if ([shared respondsToSelector:selectors[i]]) {
+                [shared performSelector:selectors[i] withObject:key];
+                break;
+            }
+        }
+        
+        // Also try setting key via KVC then calling login
+        @try { [shared setValue:key forKey:@"activationKey"]; } @catch(NSException *e) {}
+        @try { [shared setValue:key forKey:@"key"]; } @catch(NSException *e) {}
+        @try { [shared setValue:key forKey:@"licenseKey"]; } @catch(NSException *e) {}
+        
+        if ([shared respondsToSelector:@selector(login)]) {
+            [shared performSelector:@selector(login)];
+        }
+        if ([shared respondsToSelector:@selector(doLogin)]) {
+            [shared performSelector:@selector(doLogin)];
+        }
+    }
     
-    NSURL *url = [NSURL URLWithString:@"https://v.fembabe.org/api/vcam/activate"];
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-    req.HTTPMethod = @"POST";
-    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    req.HTTPBody = [NSJSONSerialization dataWithJSONObject:@{@"username":key, @"key":key, @"devicePub":@""} options:0 error:nil];
-    
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            [loading dismissViewControllerAnimated:YES completion:^{
-                if (err) {
-                    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Error" message:err.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
-                    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                    [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
-                    return;
+    // Try the settings VC class
+    Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+    if (settingsClass) {
+        id vc = [[settingsClass alloc] init];
+        
+        // Set key via KVC
+        @try { [vc setValue:key forKey:@"activationKey"]; } @catch(NSException *e) {}
+        @try { [vc setValue:key forKey:@"key"]; } @catch(NSException *e) {}
+        @try { [vc setValue:key forKey:@"keyField"]; } @catch(NSException *e) {}
+        
+        // Load view to access text fields
+        if ([vc isKindOfClass:[UIViewController class]]) {
+            [(UIViewController *)vc loadViewIfNeeded];
+            // Find text fields and set key
+            for (UIView *v in [(UIViewController *)vc view].subviews) {
+                if ([v isKindOfClass:[UITextField class]]) {
+                    [(UITextField *)v setText:key];
                 }
-                NSDictionary *json = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-                NSString *msg = [json[@"ok"] boolValue] ? @"✓ Activated! Open Camera app now." : (json[@"error"] ?: @"Failed");
-                NSString *title = [json[@"ok"] boolValue] ? @"Success" : @"Error";
-                UIAlertController *a = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
-                [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-                [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
-            }];
-        });
-    }] resume];
+            }
+        }
+        
+        // Call activation methods
+        if ([vc respondsToSelector:@selector(authActivateTapped)]) {
+            [vc performSelector:@selector(authActivateTapped)];
+        }
+        if ([vc respondsToSelector:@selector(activateTapped)]) {
+            [vc performSelector:@selector(activateTapped)];
+        }
+        if ([vc respondsToSelector:@selector(login)]) {
+            [vc performSelector:@selector(login)];
+        }
+    }
+    
+    // Show feedback
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Activating..." message:@"Check if camera panel appears" preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+    [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
 }
 
 - (void)handleTap {
@@ -62,19 +110,17 @@ static UIWindow *g_presentWin = nil;
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) ws = self;
     [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
-        [ws activateWithKey:alert.textFields.firstObject.text];
+        [ws triggerCameraLogin:alert.textFields.firstObject.text];
     }]];
     [g_presentWin.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
-    UIWindow *win = g_overlayWin;
-    if (!win) return;
     static CGPoint sc;
-    if (pan.state == UIGestureRecognizerStateBegan) sc = win.center;
+    if (pan.state == UIGestureRecognizerStateBegan) sc = g_overlayWin.center;
     else if (pan.state == UIGestureRecognizerStateChanged) {
         CGPoint t = [pan translationInView:nil];
-        win.center = CGPointMake(sc.x + t.x, sc.y + t.y);
+        g_overlayWin.center = CGPointMake(sc.x + t.x, sc.y + t.y);
     }
 }
 @end
