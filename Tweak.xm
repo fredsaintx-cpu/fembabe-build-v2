@@ -1,5 +1,4 @@
-// FemBabe iOS-18 Overlay v12
-// FIXED: No white screen when not logged in, ultra-smooth drag
+// FemBabe iOS-18 Overlay v12b
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -10,19 +9,7 @@
 static UIWindow *g_overlayWin = nil;
 static UIWindow *g_presentWin = nil;
 
-#pragma mark - Get manager instance
-
-static id getManager(void) {
-    Class mgrClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
-    if (!mgrClass) return nil;
-    if ([mgrClass respondsToSelector:@selector(sharedInstance)]) {
-        return [mgrClass performSelector:@selector(sharedInstance)];
-    }
-    return nil;
-}
-
 static BOOL isLoggedIn(void) {
-    // Check via the VC class
     Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
     if (!vcClass) return NO;
     id vc = [[vcClass alloc] init];
@@ -32,8 +19,6 @@ static BOOL isLoggedIn(void) {
     }
     return NO;
 }
-
-#pragma mark - Smooth draggable button
 
 @interface FBButton : UIButton {
     CGPoint _touchOffset;
@@ -46,22 +31,18 @@ static BOOL isLoggedIn(void) {
     UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [h impactOccurred];
     
-    // If already showing something, dismiss it
     if (g_presentWin.rootViewController.presentedViewController) {
         [g_presentWin.rootViewController dismissViewControllerAnimated:YES completion:nil];
         return;
     }
     
-    // Check login state
     if (isLoggedIn()) {
-        // LOGGED IN: Show settings VC (white screen is OK here)
         Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
         if (!vcClass) return;
         UIViewController *vc = [[vcClass alloc] init];
         if (!vc) return;
         [g_presentWin.rootViewController presentViewController:vc animated:YES completion:nil];
     } else {
-        // NOT LOGGED IN: Show login alert directly, NO white screen
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe Login"
             message:@"Enter your activation key"
             preferredStyle:UIAlertControllerStyleAlert];
@@ -72,17 +53,13 @@ static BOOL isLoggedIn(void) {
         }];
         
         [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-        
         [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
             NSString *key = alert.textFields.firstObject.text;
             if (key.length > 0) {
-                // Try to activate via the VC
                 Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
                 if (vcClass) {
                     id vc = [[vcClass alloc] init];
-                    // Set the key and call activate
                     if ([vc respondsToSelector:@selector(authActivateTapped)]) {
-                        // Store key somewhere the VC can read it, or call login directly
                         [vc performSelector:@selector(authActivateTapped)];
                     }
                 }
@@ -93,7 +70,6 @@ static BOOL isLoggedIn(void) {
     }
 }
 
-// ULTRA SMOOTH: Track touch offset, move window layer directly
 - (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
     CGPoint touchPoint = [touch locationInView:self];
     _touchOffset = CGPointMake(touchPoint.x - self.bounds.size.width/2, touchPoint.y - self.bounds.size.height/2);
@@ -107,12 +83,10 @@ static BOOL isLoggedIn(void) {
     CGPoint screenPoint = [touch locationInView:nil];
     CGPoint newCenter = CGPointMake(screenPoint.x - _touchOffset.x, screenPoint.y - _touchOffset.y);
     
-    // Bounds
     CGRect screen = [UIScreen mainScreen].bounds;
     newCenter.x = MAX(25, MIN(screen.size.width - 25, newCenter.x));
     newCenter.y = MAX(60, MIN(screen.size.height - 25, newCenter.y));
     
-    // Direct layer update - fastest possible
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     win.layer.position = newCenter;
@@ -122,8 +96,6 @@ static BOOL isLoggedIn(void) {
 }
 
 @end
-
-#pragma mark - Passthrough window
 
 @interface FBPresentWindow : UIWindow
 @end
@@ -135,8 +107,6 @@ static BOOL isLoggedIn(void) {
 }
 @end
 
-#pragma mark - Block B button
-
 static IMP orig_setTitle = NULL;
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (self.tag != FEMBABE_TAG && [title isEqualToString:@"B"]) {
@@ -144,8 +114,6 @@ static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlSt
     }
     ((void(*)(id,SEL,NSString*,UIControlState))orig_setTitle)(self, _cmd, title, state);
 }
-
-#pragma mark - Build overlay
 
 static UIWindowScene *activeScene(void) {
     for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
