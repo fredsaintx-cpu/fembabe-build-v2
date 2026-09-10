@@ -7,28 +7,15 @@ static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 
-// Hook setTitle - hide B button
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
-    if (title && [title isEqualToString:@"B"]) {
-        self.hidden = YES;
-        return;
-    }
-    if (orig_setTitle) {
-        ((void(*)(id,SEL,id,UIControlState))orig_setTitle)(self, _cmd, title, state);
-    }
+    if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
+    if (orig_setTitle) ((void(*)(id,SEL,id,UIControlState))orig_setTitle)(self, _cmd, title, state);
 }
 
-// Hook addSubview - hide orange button class
 static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
-    // Check if it's the orange float button class
     Class orangeClass = NSClassFromString(@"iHsfaTkdhwkzopQfsnwBd");
-    if (orangeClass && [view isKindOfClass:orangeClass]) {
-        view.hidden = YES;
-        return; // Don't add it
-    }
-    if (orig_addSubview) {
-        ((void(*)(id,SEL,id))orig_addSubview)(self, _cmd, view);
-    }
+    if (orangeClass && [view isKindOfClass:orangeClass]) { view.hidden = YES; return; }
+    if (orig_addSubview) ((void(*)(id,SEL,id))orig_addSubview)(self, _cmd, view);
 }
 
 @interface FBPresentWindow : UIWindow
@@ -50,7 +37,7 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
     AudioServicesPlaySystemSound(1519);
     
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe Login"
-                                                                   message:@"Enter your activation key"
+                                                                   message:@"Enter key, then tap Login in the panel"
                                                             preferredStyle:UIAlertControllerStyleAlert];
     
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
@@ -58,7 +45,7 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
         tf.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
     }];
     
-    [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *key = alert.textFields.firstObject.text;
         if (key.length == 0) return;
         
@@ -67,15 +54,18 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
         id vc = [[cls alloc] init];
         if (!vc) return;
         
+        // Set server and credentials
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
         
-        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
-            });
-        }];
+        // Load view so text fields are populated
+        if ([vc respondsToSelector:@selector(loadViewIfNeeded)]) {
+            ((void(*)(id,SEL))objc_msgSend)(vc, @selector(loadViewIfNeeded));
+        }
+        
+        // Present - user will see login UI and tap Login themselves
+        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:nil];
     }]];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
@@ -93,11 +83,8 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
 @end
 
 %ctor {
-    // Hook setTitle on UIButton
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
     if (m1) orig_setTitle = method_setImplementation(m1, (IMP)hook_setTitle);
-    
-    // Hook addSubview on UIView
     Method m2 = class_getInstanceMethod([UIView class], @selector(addSubview:));
     if (m2) orig_addSubview = method_setImplementation(m2, (IMP)hook_addSubview);
     
