@@ -36,18 +36,26 @@ static UIWindow *overlayWindow = nil;
         NSString *key = alert.textFields.firstObject.text;
         if (key.length == 0) return;
         
-        // Present Settings VC like beta1_1_9
         Class cls = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
         if (!cls) return;
         id vc = [[cls alloc] init];
         if (!vc) return;
-        if ([vc respondsToSelector:@selector(setServer:)])
-            ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
-        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:nil];
+        
+        // Set server, username, password
+        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
+        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
+        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
+        
+        // Present VC
+        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
+            // Call login after presented
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
+            });
+        }];
     }]];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    
     [overlayWindow.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
@@ -63,7 +71,7 @@ static UIWindow *overlayWindow = nil;
 
 static IMP origSetTitle = NULL;
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
-    if ([title isEqualToString:@"B"]) { self.hidden = YES; return; }
+    if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
     ((void(*)(id,SEL,id,UIControlState))origSetTitle)(self, _cmd, title, state);
 }
 
@@ -88,8 +96,9 @@ static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlSt
             overlayWindow.rootViewController = [UIViewController new];
             overlayWindow.hidden = NO;
             
+            // TRUE PURPLE: RGB(128, 0, 128) = 0.5, 0, 0.5
             FBButton *btn = [[FBButton alloc] initWithFrame:CGRectMake(20,100,50,50)];
-            btn.backgroundColor = [UIColor colorWithRed:0.5 green:0 blue:0.5 alpha:1];
+            btn.backgroundColor = [UIColor colorWithRed:0.4 green:0.0 blue:0.6 alpha:1.0];
             [btn setTitle:@"F" forState:UIControlStateNormal];
             [btn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
             btn.titleLabel.font = [UIFont boldSystemFontOfSize:24];
