@@ -16,10 +16,7 @@ static void showActivationAlert(void);
 // Hook setRtmp: to redirect to localhost proxy
 static void hook_setRtmp(id self, SEL _cmd, NSString *rtmpUrl) {
     NSLog(@"[FemBabe] Original RTMP: %@", rtmpUrl);
-    
-    // Replace server with localhost (daemon proxies to real server)
     if (rtmpUrl && [rtmpUrl containsString:@"rtmp://"]) {
-        // Extract path from URL, replace host with 127.0.0.1
         NSRange hostStart = [rtmpUrl rangeOfString:@"rtmp://"];
         if (hostStart.location != NSNotFound) {
             NSString *afterScheme = [rtmpUrl substringFromIndex:hostStart.location + hostStart.length];
@@ -31,10 +28,7 @@ static void hook_setRtmp(id self, SEL _cmd, NSString *rtmpUrl) {
             }
         }
     }
-    
-    if (orig_setRtmp) {
-        ((void(*)(id,SEL,id))orig_setRtmp)(self, _cmd, rtmpUrl);
-    }
+    if (orig_setRtmp) ((void(*)(id,SEL,id))orig_setRtmp)(self, _cmd, rtmpUrl);
 }
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
@@ -120,6 +114,30 @@ static void doLogin(NSString *key) {
                 if (data && !e) {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if ([json[@"ok"] boolValue]) {
+                        NSLog(@"[FemBabe] Login success!");
+                        
+                        // Extract session ID from encConfig
+                        NSDictionary *encConfig = json[@"encConfig"];
+                        if (encConfig[@"ct"]) {
+                            NSData *ctData = [[NSData alloc] initWithBase64EncodedString:encConfig[@"ct"] options:0];
+                            if (ctData) {
+                                NSDictionary *config = [NSJSONSerialization JSONObjectWithData:ctData options:0 error:nil];
+                                NSString *sid = config[@"sid"];
+                                if (sid) {
+                                    NSLog(@"[FemBabe] Got SID: %@", sid);
+                                    // Set token on API
+                                    ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setToken:), sid);
+                                }
+                            }
+                        }
+                        
+                        // Also try setting license sig as token
+                        NSString *licenseSig = json[@"licenseSig"];
+                        if (licenseSig) {
+                            NSLog(@"[FemBabe] Setting licenseSig as token");
+                            ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setToken:), licenseSig);
+                        }
+                        
                         ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
                         g_isAuthed = YES;
                     } else {
@@ -148,7 +166,6 @@ static void showActivationAlert(void) {
 }
 
 %ctor {
-    // Hook setRtmp: on vcam manager to redirect to localhost proxy
     Class vcamMgr = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
     if (vcamMgr) {
         Method m = class_getInstanceMethod(vcamMgr, @selector(setRtmp:));
