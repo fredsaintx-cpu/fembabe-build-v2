@@ -15,14 +15,9 @@ jobs:
         run: |
           brew install ldid xz dpkg
           git clone --depth=1 https://github.com/theos/theos.git $HOME/theos
-          curl -sL https://github.com/theos/sdks/releases/latest/download/iPhoneOS17.5.sdk.tar.xz | tar -xJf - -C $HOME/theos/sdks
+          curl -sLo sdk.tar.xz "https://github.com/theos/sdks/releases/download/iPhoneOS17.5-15.4/iPhoneOS17.5.sdk.tar.xz"
+          tar -xJf sdk.tar.xz -C $HOME/theos/sdks || { curl -sLo sdk.tar.xz "https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz" && tar -xJf sdk.tar.xz -C $HOME/theos/sdks; }
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
-          
-      - name: Build Daemon
-        run: |
-          cd daemon
-          make FINALPACKAGE=1 2>&1 || echo "Daemon build skipped/failed"
-          ls -la .theos/obj/debug/ 2>/dev/null || true
           
       - name: Build Tweak
         run: |
