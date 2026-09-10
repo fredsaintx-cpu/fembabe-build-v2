@@ -1,4 +1,4 @@
-// FemBabe iOS-18 Overlay v24 - Trigger camera's own login
+// FemBabe iOS-18 Overlay v25 - Correct method calls from Frida dump
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -13,47 +13,43 @@ static UIWindow *g_presentWin = nil;
 
 @implementation FBButton
 
-- (void)triggerCameraLogin:(NSString *)key {
-    Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
-    id shared = nil;
-    if (vcamClass) {
-        shared = ((id(*)(id,SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
-    }
-    
-    if (shared) {
-        @try { [shared setValue:key forKey:@"activationKey"]; } @catch(NSException *e) {}
-        @try { [shared setValue:key forKey:@"key"]; } @catch(NSException *e) {}
-        @try { [shared setValue:key forKey:@"licenseKey"]; } @catch(NSException *e) {}
-        
-        if ([shared respondsToSelector:@selector(loginWithKey:)]) {
-            ((void(*)(id,SEL,id))objc_msgSend)(shared, @selector(loginWithKey:), key);
-        }
-        if ([shared respondsToSelector:@selector(login)]) {
-            ((void(*)(id,SEL))objc_msgSend)(shared, @selector(login));
-        }
-    }
-    
+- (void)triggerLogin:(NSString *)key {
+    // Get settings VC class
     Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-    if (settingsClass) {
-        id vc = [[settingsClass alloc] init];
-        @try { [vc setValue:key forKey:@"activationKey"]; } @catch(NSException *e) {}
-        @try { [vc setValue:key forKey:@"key"]; } @catch(NSException *e) {}
-        
-        if ([vc isKindOfClass:[UIViewController class]]) {
-            [(UIViewController *)vc loadViewIfNeeded];
-            for (UIView *v in [(UIViewController *)vc view].subviews) {
-                if ([v isKindOfClass:[UITextField class]]) {
-                    [(UITextField *)v setText:key];
-                }
-            }
-        }
-        
-        if ([vc respondsToSelector:@selector(authActivateTapped)]) {
-            ((void(*)(id,SEL))objc_msgSend)(vc, @selector(authActivateTapped));
+    if (!settingsClass) {
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Error" message:@"Settings class not found" preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
+        return;
+    }
+    
+    // Create instance
+    id vc = [[settingsClass alloc] init];
+    if (!vc) return;
+    
+    // Set username and password (both are the key)
+    if ([vc respondsToSelector:@selector(setUsername:)]) {
+        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
+    }
+    if ([vc respondsToSelector:@selector(setPassword:)]) {
+        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
+    }
+    
+    // Call login method
+    if ([vc respondsToSelector:@selector(login)]) {
+        ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
+    }
+    
+    // Also try to show float window directly
+    Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
+    if (vcamClass) {
+        id shared = ((id(*)(id,SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
+        if (shared && [shared respondsToSelector:@selector(setFloatWindow:)]) {
+            ((void(*)(id,SEL,BOOL))objc_msgSend)(shared, @selector(setFloatWindow:), YES);
         }
     }
     
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Sent" message:@"Check if panel appears" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Logging in..." message:@"Wait for camera panel" preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
     [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
 }
@@ -76,7 +72,7 @@ static UIWindow *g_presentWin = nil;
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) ws = self;
     [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act) {
-        [ws triggerCameraLogin:alert.textFields.firstObject.text];
+        [ws triggerLogin:alert.textFields.firstObject.text];
     }]];
     [g_presentWin.rootViewController presentViewController:alert animated:YES completion:nil];
 }
