@@ -1,80 +1,77 @@
 #!/bin/bash
 set -e
 
-VERSION="1.1.70"
-PKG_DIR="/tmp/fembabe_pkg"
+mkdir -p out/var/jb/Library/MobileSubstrate/DynamicLibraries
+mkdir -p out/var/jb/usr/libexec
+mkdir -p out/var/jb/Library/LaunchDaemons
+mkdir -p out/DEBIAN
 
-rm -rf "$PKG_DIR"
-mkdir -p "$PKG_DIR/var/jb/Library/MobileSubstrate/DynamicLibraries"
-mkdir -p "$PKG_DIR/var/jb/usr/libexec"
-mkdir -p "$PKG_DIR/var/jb/Library/LaunchDaemons"
-mkdir -p "$PKG_DIR/DEBIAN"
+# Copy tweak (check both locations)
+if [ -f tweak/.theos/obj/fembabe_overlay.dylib ]; then
+    cp tweak/.theos/obj/fembabe_overlay.dylib out/var/jb/Library/MobileSubstrate/DynamicLibraries/
+elif [ -f tweak/.theos/obj/debug/fembabe_overlay.dylib ]; then
+    cp tweak/.theos/obj/debug/fembabe_overlay.dylib out/var/jb/Library/MobileSubstrate/DynamicLibraries/
+else
+    echo "ERROR: Cannot find fembabe_overlay.dylib"
+    find tweak/.theos -name "*.dylib" 2>/dev/null
+    exit 1
+fi
 
-# Copy tweak
-cp tweak/.theos/obj/debug/fembabe_overlay.dylib "$PKG_DIR/var/jb/Library/MobileSubstrate/DynamicLibraries/"
-cp tweak/fembabe_overlay.plist "$PKG_DIR/var/jb/Library/MobileSubstrate/DynamicLibraries/"
+cp tweak/fembabe_overlay.plist out/var/jb/Library/MobileSubstrate/DynamicLibraries/
 
 # Copy daemon
-cp daemon/.theos/obj/debug/vcam_rtmpd "$PKG_DIR/var/jb/usr/libexec/"
-chmod 755 "$PKG_DIR/var/jb/usr/libexec/vcam_rtmpd"
+if [ -f daemon/.theos/obj/vcam_netd ]; then
+    cp daemon/.theos/obj/vcam_netd out/var/jb/usr/libexec/
+elif [ -f daemon/.theos/obj/debug/vcam_netd ]; then
+    cp daemon/.theos/obj/debug/vcam_netd out/var/jb/usr/libexec/
+fi
+chmod 755 out/var/jb/usr/libexec/vcam_netd
 
-# Create LaunchDaemon plist
-cat > "$PKG_DIR/var/jb/Library/LaunchDaemons/com.fembabe.vcam.rtmpd.plist" << 'PLIST'
+# LaunchDaemon plist
+cat > out/var/jb/Library/LaunchDaemons/com.fembabe.vcam.netd.plist << 'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.fembabe.vcam.rtmpd</string>
+    <string>com.fembabe.vcam.netd</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/var/jb/usr/libexec/vcam_rtmpd</string>
+        <string>/var/jb/usr/libexec/vcam_netd</string>
     </array>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
     <true/>
-    <key>UserName</key>
-    <string>root</string>
 </dict>
 </plist>
 PLIST
 
-# Control file
-cat > "$PKG_DIR/DEBIAN/control" << CTRL
+# Control
+cat > out/DEBIAN/control << 'CTRL'
 Package: com.fembabe.vcam
 Name: FemBabe VCam
-Description: FemBabe Virtual Camera with iOS 18 RTMP Proxy
-Maintainer: FemBabe
-Author: FemBabe
-Section: Tweaks
+Version: 1.1.69
 Architecture: iphoneos-arm64
-Version: $VERSION
-Installed-Size: 512
-Conflicts: com.x.obsvcamera
-Replaces: com.x.obsvcamera
+Maintainer: FemBabe
+Section: Tweaks
+Description: FemBabe VCam + RTMP Proxy
 CTRL
 
-# postinst
-cat > "$PKG_DIR/DEBIAN/postinst" << 'POSTINST'
+# Scripts
+cat > out/DEBIAN/postinst << 'POST'
 #!/bin/bash
-/var/jb/usr/bin/launchctl unload /var/jb/Library/LaunchDaemons/com.fembabe.vcam.rtmpd.plist 2>/dev/null || true
-launchctl unload /var/jb/Library/LaunchDaemons/com.fembabe.vcam.rtmpd.plist 2>/dev/null || true
-/var/jb/usr/bin/launchctl load /var/jb/Library/LaunchDaemons/com.fembabe.vcam.rtmpd.plist 2>/dev/null || true
-launchctl load /var/jb/Library/LaunchDaemons/com.fembabe.vcam.rtmpd.plist 2>/dev/null || true
+launchctl load /var/jb/Library/LaunchDaemons/com.fembabe.vcam.netd.plist 2>/dev/null || true
 exit 0
-POSTINST
-chmod 755 "$PKG_DIR/DEBIAN/postinst"
+POST
+chmod 755 out/DEBIAN/postinst
 
-# prerm
-cat > "$PKG_DIR/DEBIAN/prerm" << 'PRERM'
+cat > out/DEBIAN/prerm << 'PRE'
 #!/bin/bash
-/var/jb/usr/bin/launchctl unload /var/jb/Library/LaunchDaemons/com.fembabe.vcam.rtmpd.plist 2>/dev/null || true
-launchctl unload /var/jb/Library/LaunchDaemons/com.fembabe.vcam.rtmpd.plist 2>/dev/null || true
+launchctl unload /var/jb/Library/LaunchDaemons/com.fembabe.vcam.netd.plist 2>/dev/null || true
 exit 0
-PRERM
-chmod 755 "$PKG_DIR/DEBIAN/prerm"
+PRE
+chmod 755 out/DEBIAN/prerm
 
-# Build deb
-dpkg-deb -Zxz --root-owner-group -b "$PKG_DIR" "fembabecam_v${VERSION}.deb"
-echo "Built fembabecam_v${VERSION}.deb"
+dpkg-deb -Zxz -b out fembabecam_v1.1.69.deb
+echo "Built: fembabecam_v1.1.69.deb"
