@@ -1,13 +1,70 @@
-// FemBabe Overlay v17 - Direct API Activation
+// FemBabe Overlay v19 - Direct API + Aggressive B-Kill
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 
-#define FEMBABE_TAG 0xFB0017
+#define FEMBABE_TAG 0xFB0019
 
 static UIWindow *g_overlayWin = nil;
 static UIButton *g_fbButton = nil;
+
+#pragma mark - Aggressive B Killer
+
+static void killBButtonsInView(UIView *view) {
+    if (!view) return;
+    
+    // If it's a small button with "B" title and not ours, kill it
+    if ([view isKindOfClass:[UIButton class]]) {
+        UIButton *btn = (UIButton *)view;
+        NSString *title = [btn titleForState:UIControlStateNormal];
+        CGRect frame = btn.frame;
+        
+        if ([title isEqualToString:@"B"] && btn.tag != FEMBABE_TAG) {
+            btn.hidden = YES;
+            btn.alpha = 0;
+            btn.userInteractionEnabled = NO;
+            [btn removeFromSuperview];
+            NSLog(@"[FemBabe] Killed B button");
+        }
+        // Also kill any small button (<=80pt) that's not ours
+        if (frame.size.width <= 80 && frame.size.height <= 80 && btn.tag != FEMBABE_TAG) {
+            if (btn.backgroundColor && btn != g_fbButton) {
+                // Check if it's orange-ish
+                CGFloat r, g, b, a;
+                [btn.backgroundColor getRed:&r green:&g blue:&b alpha:&a];
+                if (r > 0.8 && g > 0.3 && g < 0.7 && b < 0.3) {
+                    btn.hidden = YES;
+                    btn.alpha = 0;
+                    [btn removeFromSuperview];
+                    NSLog(@"[FemBabe] Killed orange button");
+                }
+            }
+        }
+    }
+    
+    for (UIView *sub in view.subviews) {
+        killBButtonsInView(sub);
+    }
+}
+
+static void killAllBButtons(void) {
+    for (UIWindow *win in [UIApplication sharedApplication].windows) {
+        if (win == g_overlayWin) continue;
+        
+        // Kill small floating windows that aren't ours
+        CGRect f = win.frame;
+        if (f.size.width <= 200 && f.size.height <= 200 && win.tag != FEMBABE_TAG) {
+            win.hidden = YES;
+            win.alpha = 0;
+            NSLog(@"[FemBabe] Killed small float window");
+        }
+        
+        killBButtonsInView(win);
+    }
+}
+
+#pragma mark - Device Pub Key
 
 static NSString *getDevicePubKey(void) {
     Class vcamClass = objc_getClass("ifdsflwoWdasdYfsdfJd");
@@ -24,6 +81,8 @@ static NSString *getDevicePubKey(void) {
     }
     return @"";
 }
+
+#pragma mark - API Activation
 
 static void activateWithKey(NSString *key, UIViewController *presenter) {
     if (!key || key.length == 0) {
@@ -95,6 +154,8 @@ static void activateWithKey(NSString *key, UIViewController *presenter) {
         }] resume];
 }
 
+#pragma mark - Show Login UI
+
 static void showLoginUI(void) {
     UIViewController *root = g_overlayWin.rootViewController;
     if (!root) return;
@@ -116,6 +177,8 @@ static void showLoginUI(void) {
     
     [root presentViewController:alert animated:YES completion:nil];
 }
+
+#pragma mark - Overlay Window
 
 @interface FBOverlayWindow : UIWindow
 @end
@@ -141,6 +204,8 @@ static void showLoginUI(void) {
 }
 @end
 
+#pragma mark - Get Active Scene
+
 static UIWindowScene *getActiveScene(void) {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if (scene.activationState == UISceneActivationStateForegroundActive &&
@@ -156,6 +221,8 @@ static UIWindowScene *getActiveScene(void) {
     return nil;
 }
 
+#pragma mark - Build Overlay
+
 static void buildOverlay(void) {
     if (g_overlayWin) return;
     UIWindowScene *scene = getActiveScene();
@@ -165,6 +232,7 @@ static void buildOverlay(void) {
     win.frame = CGRectMake(20, 150, 50, 50);
     win.windowLevel = UIWindowLevelAlert + 10000;
     win.backgroundColor = [UIColor clearColor];
+    win.tag = FEMBABE_TAG;
     win.rootViewController = [[UIViewController alloc] init];
     win.rootViewController.view.backgroundColor = [UIColor clearColor];
     
@@ -186,8 +254,14 @@ static void buildOverlay(void) {
     win.hidden = NO;
     g_overlayWin = win;
     g_fbButton = btn;
-    NSLog(@"[FemBabe] v17 overlay - Direct API");
+    
+    // Kill B buttons immediately and on timer
+    killAllBButtons();
+    
+    NSLog(@"[FemBabe] v19 overlay created");
 }
+
+#pragma mark - Hooks
 
 %hook UIButton
 - (void)setTitle:(NSString *)title forState:(UIControlState)state {
@@ -203,7 +277,18 @@ static void buildOverlay(void) {
 
 %ctor {
     @autoreleasepool {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            buildOverlay();
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            buildOverlay();
+            killAllBButtons();
+        });
+        // Keep killing B for first 10 seconds
+        for (int i = 1; i <= 10; i++) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, i*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+                killAllBButtons();
+            });
+        }
     }
 }
