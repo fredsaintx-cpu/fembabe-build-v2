@@ -9,25 +9,29 @@ static UITextField *keyField = nil;
 static UIView *activationPanel = nil;
 
 static void doLogin(NSString *key) {
-    // Get Settings VC class
     Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
     if (!settingsClass) return;
     
-    // Create and configure
     id vc = [[settingsClass alloc] init];
+    
+    // Set server first
     ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
+    
+    // Load the view (triggers viewDidLoad)
+    [vc loadViewIfNeeded];
+    
+    // Set credentials
     ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
     ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
     
-    // Hide our panel
+    // Small delay then call login
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+        ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
+    });
+    
+    // Hide panel
     activationPanel.hidden = YES;
     [keyField resignFirstResponder];
-    
-    // Present it so user can tap native Login button
-    UINavigationController *nav = [[UINavigationController alloc] initWithRootViewController:vc];
-    nav.modalPresentationStyle = UIModalPresentationFormSheet;
-    [overlayWindow.rootViewController presentViewController:nav animated:YES completion:nil];
-    
     AudioServicesPlaySystemSound(1519);
 }
 
@@ -86,7 +90,6 @@ static void showActivationPanel(void) {
 }
 @end
 
-// Hide camera's orange button
 static IMP origSetTitle = NULL;
 static void blockB(id self, SEL _cmd, NSString *title, UIControlState state) {
     if ([title isEqualToString:@"B"]) { [self setHidden:YES]; return; }
