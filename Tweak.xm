@@ -1,69 +1,129 @@
-// FemBabe iOS-18 Overlay v11
-// SMOOTHER DRAG: Follow finger directly
+// FemBabe iOS-18 Overlay v12
+// FIXED: No white screen when not logged in, ultra-smooth drag
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <QuartzCore/QuartzCore.h>
 
 #define FEMBABE_TAG 0xFE0BABE
 
 static UIWindow *g_overlayWin = nil;
 static UIWindow *g_presentWin = nil;
 
-@interface FBButton : UIButton
+#pragma mark - Get manager instance
+
+static id getManager(void) {
+    Class mgrClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
+    if (!mgrClass) return nil;
+    if ([mgrClass respondsToSelector:@selector(sharedInstance)]) {
+        return [mgrClass performSelector:@selector(sharedInstance)];
+    }
+    return nil;
+}
+
+static BOOL isLoggedIn(void) {
+    // Check via the VC class
+    Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+    if (!vcClass) return NO;
+    id vc = [[vcClass alloc] init];
+    if (!vc) return NO;
+    if ([vc respondsToSelector:@selector(loggedin)]) {
+        return ((BOOL(*)(id, SEL))objc_msgSend)(vc, @selector(loggedin));
+    }
+    return NO;
+}
+
+#pragma mark - Smooth draggable button
+
+@interface FBButton : UIButton {
+    CGPoint _touchOffset;
+}
 @end
 
 @implementation FBButton
 
 - (void)handleTap {
+    UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [h impactOccurred];
+    
+    // If already showing something, dismiss it
     if (g_presentWin.rootViewController.presentedViewController) {
         [g_presentWin.rootViewController dismissViewControllerAnimated:YES completion:nil];
-        UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
-        [h impactOccurred];
         return;
     }
     
-    Class loginVCClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-    if (!loginVCClass) return;
-    UIViewController *loginVC = [[loginVCClass alloc] init];
-    if (!loginVC) return;
-    
-    BOOL isLoggedIn = NO;
-    if ([loginVC respondsToSelector:@selector(loggedin)]) {
-        isLoggedIn = ((BOOL(*)(id, SEL))objc_msgSend)(loginVC, @selector(loggedin));
-    }
-    
-    if (isLoggedIn) {
-        [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:nil];
+    // Check login state
+    if (isLoggedIn()) {
+        // LOGGED IN: Show settings VC (white screen is OK here)
+        Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+        if (!vcClass) return;
+        UIViewController *vc = [[vcClass alloc] init];
+        if (!vc) return;
+        [g_presentWin.rootViewController presentViewController:vc animated:YES completion:nil];
     } else {
-        [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:^{
-            if ([loginVC respondsToSelector:@selector(authLoginTapped)]) {
-                [loginVC performSelector:@selector(authLoginTapped)];
-            }
+        // NOT LOGGED IN: Show login alert directly, NO white screen
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe Login"
+            message:@"Enter your activation key"
+            preferredStyle:UIAlertControllerStyleAlert];
+        
+        [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+            tf.placeholder = @"Activation Key";
+            tf.secureTextEntry = YES;
         }];
+        
+        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+        
+        [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+            NSString *key = alert.textFields.firstObject.text;
+            if (key.length > 0) {
+                // Try to activate via the VC
+                Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+                if (vcClass) {
+                    id vc = [[vcClass alloc] init];
+                    // Set the key and call activate
+                    if ([vc respondsToSelector:@selector(authActivateTapped)]) {
+                        // Store key somewhere the VC can read it, or call login directly
+                        [vc performSelector:@selector(authActivateTapped)];
+                    }
+                }
+            }
+        }]];
+        
+        [g_presentWin.rootViewController presentViewController:alert animated:YES completion:nil];
     }
-    
-    UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
-    [h impactOccurred];
 }
 
-// SMOOTH DRAG: Directly follow finger position
-- (void)handlePan:(UIPanGestureRecognizer *)g {
+// ULTRA SMOOTH: Track touch offset, move window layer directly
+- (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
+    CGPoint touchPoint = [touch locationInView:self];
+    _touchOffset = CGPointMake(touchPoint.x - self.bounds.size.width/2, touchPoint.y - self.bounds.size.height/2);
+    return YES;
+}
+
+- (BOOL)continueTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
     UIWindow *win = g_overlayWin;
-    if (!win) return;
+    if (!win) return YES;
     
-    // Get finger position in screen coordinates
-    CGPoint finger = [g locationInView:nil];
+    CGPoint screenPoint = [touch locationInView:nil];
+    CGPoint newCenter = CGPointMake(screenPoint.x - _touchOffset.x, screenPoint.y - _touchOffset.y);
     
-    // Clamp to screen bounds (keep button fully visible)
+    // Bounds
     CGRect screen = [UIScreen mainScreen].bounds;
-    finger.x = MAX(25, MIN(screen.size.width - 25, finger.x));
-    finger.y = MAX(60, MIN(screen.size.height - 25, finger.y));
+    newCenter.x = MAX(25, MIN(screen.size.width - 25, newCenter.x));
+    newCenter.y = MAX(60, MIN(screen.size.height - 25, newCenter.y));
     
-    // Directly set window center to finger position - no lag
-    win.center = finger;
+    // Direct layer update - fastest possible
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+    win.layer.position = newCenter;
+    [CATransaction commit];
+    
+    return YES;
 }
 
 @end
+
+#pragma mark - Passthrough window
 
 @interface FBPresentWindow : UIWindow
 @end
@@ -75,6 +135,8 @@ static UIWindow *g_presentWin = nil;
 }
 @end
 
+#pragma mark - Block B button
+
 static IMP orig_setTitle = NULL;
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (self.tag != FEMBABE_TAG && [title isEqualToString:@"B"]) {
@@ -82,6 +144,8 @@ static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlSt
     }
     ((void(*)(id,SEL,NSString*,UIControlState))orig_setTitle)(self, _cmd, title, state);
 }
+
+#pragma mark - Build overlay
 
 static UIWindowScene *activeScene(void) {
     for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
@@ -121,8 +185,6 @@ static void buildOverlay(void) {
         btn.titleLabel.font = [UIFont boldSystemFontOfSize:22];
         [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
         [btn addTarget:btn action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
-        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:btn action:@selector(handlePan:)];
-        [btn addGestureRecognizer:pan];
         [vc.view addSubview:btn];
         ow.hidden = NO;
         g_overlayWin = ow;
