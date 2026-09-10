@@ -10,5 +10,6 @@ vcam_rtmpd_FILES = vcam_rtmpd.m
 vcam_rtmpd_CFLAGS = -fobjc-arc
 vcam_rtmpd_CODESIGN_FLAGS = -Sentitlements.plist
 vcam_rtmpd_INSTALL_PATH = /usr/libexec
+vcam_rtmpd_LIBRARIES = notify
 
 include $(THEOS_MAKE_PATH)/tool.mk
