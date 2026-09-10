@@ -1,4 +1,4 @@
-// FemBabe iOS-18 Overlay v25 - Correct login flow
+// FemBabe iOS-18 Overlay v26 - Set server before login
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -16,18 +16,17 @@ static UIWindow *g_presentWin = nil;
 - (void)doLogin:(NSString *)key {
     if (key.length == 0) return;
     
-    // Get or create settings VC
     Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-    if (!settingsClass) {
-        UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Error" message:@"Settings class not found" preferredStyle:UIAlertControllerStyleAlert];
-        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-        [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
-        return;
-    }
+    if (!settingsClass) return;
     
     id vc = [[settingsClass alloc] init];
     
-    // Set username and password to the key
+    // Set server URL first!
+    if ([vc respondsToSelector:@selector(setServer:)]) {
+        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
+    }
+    
+    // Set username and password
     if ([vc respondsToSelector:@selector(setUsername:)]) {
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
     }
@@ -39,11 +38,6 @@ static UIWindow *g_presentWin = nil;
     if ([vc respondsToSelector:@selector(login)]) {
         ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
     }
-    
-    // Show feedback
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Logging in..." message:@"Please wait" preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
-    [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
 }
 
 - (void)handleTap {
