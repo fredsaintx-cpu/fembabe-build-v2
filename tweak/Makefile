@@ -8,6 +8,5 @@ TWEAK_NAME = fembabe_overlay
 fembabe_overlay_FILES = Tweak.xm
 fembabe_overlay_CFLAGS = -fobjc-arc
 fembabe_overlay_FRAMEWORKS = UIKit AudioToolbox
-fembabe_overlay_LIBRARIES = notify
 
 include $(THEOS_MAKE_PATH)/tweak.mk
