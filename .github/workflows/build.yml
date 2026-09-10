@@ -12,11 +12,13 @@ jobs:
       - uses: actions/checkout@v4
       
       - name: Setup Theos
+        env:
+          THEOS: /Users/runner/theos
         run: |
           brew install ldid xz dpkg
-          git clone --recursive --depth=1 https://github.com/theos/theos.git $HOME/theos
-          $HOME/theos/bin/update-theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          git clone --recursive --depth=1 https://github.com/theos/theos.git $THEOS
+          $THEOS/bin/update-theos
+          echo "THEOS=$THEOS" >> $GITHUB_ENV
           
       - name: Build Tweak
         run: |
