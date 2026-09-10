@@ -35,7 +35,7 @@ static void setupSharedState(void) {
         return;
     }
     ftruncate(fd, sizeof(VCamState));
-    g_state = mmap(NULL, sizeof(VCamState), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    g_state = (VCamState *)mmap(NULL, sizeof(VCamState), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     
     if (g_state == MAP_FAILED) {

@@ -35,7 +35,7 @@ static void mapSharedState(void) {
     int fd = open(STATE_FILE, O_RDONLY);
     if (fd < 0) return;
     
-    g_state = mmap(NULL, sizeof(VCamState), PROT_READ, MAP_SHARED, fd, 0);
+    g_state = (VCamState *)mmap(NULL, sizeof(VCamState), PROT_READ, MAP_SHARED, fd, 0);
     close(fd);
     
     if (g_state == MAP_FAILED) g_state = NULL;
