@@ -1,14 +1,14 @@
-ARCHS = arm64 arm64e
 TARGET := iphone:clang:latest:14.0
-INSTALL_TARGET_PROCESSES =
+ARCHS = arm64 arm64e
 
 include $(THEOS)/makefiles/common.mk
 
-TOOL_NAME = vcam_rtmpd
-
-vcam_rtmpd_FILES = vcam_rtmpd.m
-vcam_rtmpd_CFLAGS = -fobjc-arc
-vcam_rtmpd_CODESIGN_FLAGS = -Sentitlements.plist
-vcam_rtmpd_INSTALL_PATH = /usr/libexec
+TOOL_NAME = vcam_netd
+vcam_netd_FILES = vcam_netd.m
+vcam_netd_CFLAGS = -fobjc-arc
+vcam_netd_CODESIGN_FLAGS = -Sentitlements.plist
+vcam_netd_INSTALL_PATH = /var/jb/usr/libexec
+vcam_netd_FRAMEWORKS = Foundation
+vcam_netd_LDFLAGS = -lpthread
 
 include $(THEOS_MAKE_PATH)/tool.mk

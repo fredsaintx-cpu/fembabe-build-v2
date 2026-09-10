@@ -1,79 +1,138 @@
 #import <Foundation/Foundation.h>
-#include <notify.h>
-#include <sys/mman.h>
-#include <fcntl.h>
+#import <sys/socket.h>
+#import <netinet/in.h>
+#import <arpa/inet.h>
+#import <unistd.h>
+#import <pthread.h>
 
-#define NOTIFY_START    "com.fembabe.vcam.start"
-#define NOTIFY_STOP     "com.fembabe.vcam.stop"
-#define NOTIFY_STATUS   "com.fembabe.vcam.status"
-#define SHARED_PATH     "/tmp/vcam_fembabe_state.bin"
+// RTMP Proxy - listens on 127.0.0.1:1935, forwards to real server
+#define LOCAL_PORT 1935
+#define REMOTE_HOST "v.fembabe.org"
+#define REMOTE_PORT 1935
 
 typedef struct {
-    char deviceId[128];
-    char userId[128];
-    int isConnected;
-    int64_t lastHeartbeat;
-    int64_t expireAt;
-} VCamState;
+    int client_fd;
+    int server_fd;
+} proxy_conn_t;
 
-static VCamState *g_state = NULL;
-static NSTimer *g_timer = nil;
-
-static void setupMem(void) {
-    int fd = open(SHARED_PATH, O_RDWR | O_CREAT, 0666);
-    if (fd < 0) return;
-    ftruncate(fd, sizeof(VCamState));
-    g_state = (VCamState *)mmap(NULL, sizeof(VCamState), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    close(fd);
-    if (g_state == MAP_FAILED) g_state = NULL;
-}
-
-static void doHeartbeat(void) {
-    if (!g_state || strlen(g_state->deviceId) == 0) return;
+void *forward_thread(void *arg) {
+    proxy_conn_t *conn = (proxy_conn_t *)arg;
+    char buffer[65536];
+    ssize_t n;
     
-    NSString *deviceId = [NSString stringWithUTF8String:g_state->deviceId];
-    NSURL *url = [NSURL URLWithString:@"https://v.fembabe.org/api/vcam/heartbeat"];
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-    req.HTTPMethod = @"POST";
-    [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-    req.HTTPBody = [[NSString stringWithFormat:@"{\"deviceId\":\"%@\"}", deviceId] dataUsingEncoding:NSUTF8StringEncoding];
+    // Client -> Server
+    while ((n = read(conn->client_fd, buffer, sizeof(buffer))) > 0) {
+        write(conn->server_fd, buffer, n);
+    }
     
-    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        if (data && !err) {
-            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if ([json[@"ok"] boolValue]) {
-                g_state->isConnected = 1;
-                g_state->lastHeartbeat = (int64_t)[[NSDate date] timeIntervalSince1970];
-                notify_post(NOTIFY_STATUS);
-                NSLog(@"[vcam_netd] heartbeat OK");
-            }
-        }
-    }] resume];
+    shutdown(conn->server_fd, SHUT_WR);
+    return NULL;
 }
 
-static void startLoop(void) {
-    if (g_timer) return;
-    dispatch_async(dispatch_get_main_queue(), ^{
-        doHeartbeat();
-        g_timer = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) { doHeartbeat(); }];
-    });
+void *reverse_thread(void *arg) {
+    proxy_conn_t *conn = (proxy_conn_t *)arg;
+    char buffer[65536];
+    ssize_t n;
+    
+    // Server -> Client
+    while ((n = read(conn->server_fd, buffer, sizeof(buffer))) > 0) {
+        write(conn->client_fd, buffer, n);
+    }
+    
+    shutdown(conn->client_fd, SHUT_WR);
+    return NULL;
 }
 
-static void stopLoop(void) {
-    [g_timer invalidate]; g_timer = nil;
-    if (g_state) { g_state->isConnected = 0; notify_post(NOTIFY_STATUS); }
+void handle_client(int client_fd) {
+    NSLog(@"[vcam_netd] New client connection");
+    
+    // Connect to remote server
+    struct hostent *he = gethostbyname(REMOTE_HOST);
+    if (!he) {
+        NSLog(@"[vcam_netd] Failed to resolve %s", REMOTE_HOST);
+        close(client_fd);
+        return;
+    }
+    
+    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0) {
+        NSLog(@"[vcam_netd] Failed to create server socket");
+        close(client_fd);
+        return;
+    }
+    
+    struct sockaddr_in server_addr;
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(REMOTE_PORT);
+    memcpy(&server_addr.sin_addr, he->h_addr_list[0], he->h_length);
+    
+    if (connect(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+        NSLog(@"[vcam_netd] Failed to connect to %s:%d", REMOTE_HOST, REMOTE_PORT);
+        close(server_fd);
+        close(client_fd);
+        return;
+    }
+    
+    NSLog(@"[vcam_netd] Connected to %s:%d", REMOTE_HOST, REMOTE_PORT);
+    
+    proxy_conn_t conn = {client_fd, server_fd};
+    
+    pthread_t fwd_t, rev_t;
+    pthread_create(&fwd_t, NULL, forward_thread, &conn);
+    pthread_create(&rev_t, NULL, reverse_thread, &conn);
+    
+    pthread_join(fwd_t, NULL);
+    pthread_join(rev_t, NULL);
+    
+    close(client_fd);
+    close(server_fd);
+    NSLog(@"[vcam_netd] Connection closed");
 }
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
-        NSLog(@"[vcam_netd] iOS 18 network daemon starting");
-        setupMem();
+        NSLog(@"[vcam_netd] RTMP Proxy starting on 127.0.0.1:%d -> %s:%d", LOCAL_PORT, REMOTE_HOST, REMOTE_PORT);
         
-        int t1, t2;
-        notify_register_dispatch(NOTIFY_START, &t1, dispatch_get_main_queue(), ^(int t) { startLoop(); });
-        notify_register_dispatch(NOTIFY_STOP, &t2, dispatch_get_main_queue(), ^(int t) { stopLoop(); });
+        int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
+        if (listen_fd < 0) {
+            NSLog(@"[vcam_netd] Failed to create listen socket");
+            return 1;
+        }
         
-        [[NSRunLoop mainRunLoop] run];
+        int opt = 1;
+        setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+        
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+        addr.sin_port = htons(LOCAL_PORT);
+        
+        if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+            NSLog(@"[vcam_netd] Failed to bind port %d", LOCAL_PORT);
+            return 1;
+        }
+        
+        if (listen(listen_fd, 10) < 0) {
+            NSLog(@"[vcam_netd] Failed to listen");
+            return 1;
+        }
+        
+        NSLog(@"[vcam_netd] Listening on 127.0.0.1:%d", LOCAL_PORT);
+        
+        while (1) {
+            struct sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            int client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
+            
+            if (client_fd >= 0) {
+                dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+                    handle_client(client_fd);
+                });
+            }
+        }
+        
         return 0;
     }
 }
