@@ -14,7 +14,6 @@ static UIButton *g_fbButton = nil;
 static void killBButtonsInView(UIView *view) {
     if (!view) return;
     
-    // If it's a small button with "B" title and not ours, kill it
     if ([view isKindOfClass:[UIButton class]]) {
         UIButton *btn = (UIButton *)view;
         NSString *title = [btn titleForState:UIControlStateNormal];
@@ -25,19 +24,15 @@ static void killBButtonsInView(UIView *view) {
             btn.alpha = 0;
             btn.userInteractionEnabled = NO;
             [btn removeFromSuperview];
-            NSLog(@"[FemBabe] Killed B button");
         }
-        // Also kill any small button (<=80pt) that's not ours
-        if (frame.size.width <= 80 && frame.size.height <= 80 && btn.tag != FEMBABE_TAG) {
-            if (btn.backgroundColor && btn != g_fbButton) {
-                // Check if it's orange-ish
-                CGFloat r, g, b, a;
+        if (frame.size.width <= 80 && frame.size.height <= 80 && btn.tag != FEMBABE_TAG && btn != g_fbButton) {
+            CGFloat r = 0, g = 0, b = 0, a = 0;
+            if (btn.backgroundColor) {
                 [btn.backgroundColor getRed:&r green:&g blue:&b alpha:&a];
                 if (r > 0.8 && g > 0.3 && g < 0.7 && b < 0.3) {
                     btn.hidden = YES;
                     btn.alpha = 0;
                     [btn removeFromSuperview];
-                    NSLog(@"[FemBabe] Killed orange button");
                 }
             }
         }
@@ -49,18 +44,22 @@ static void killBButtonsInView(UIView *view) {
 }
 
 static void killAllBButtons(void) {
-    for (UIWindow *win in [UIApplication sharedApplication].windows) {
-        if (win == g_overlayWin) continue;
+    // Use scenes to get windows (iOS 15+)
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        UIWindowScene *windowScene = (UIWindowScene *)scene;
         
-        // Kill small floating windows that aren't ours
-        CGRect f = win.frame;
-        if (f.size.width <= 200 && f.size.height <= 200 && win.tag != FEMBABE_TAG) {
-            win.hidden = YES;
-            win.alpha = 0;
-            NSLog(@"[FemBabe] Killed small float window");
+        for (UIWindow *win in windowScene.windows) {
+            if (win == g_overlayWin) continue;
+            
+            CGRect f = win.frame;
+            if (f.size.width <= 200 && f.size.height <= 200 && win.tag != FEMBABE_TAG) {
+                win.hidden = YES;
+                win.alpha = 0;
+            }
+            
+            killBButtonsInView(win);
         }
-        
-        killBButtonsInView(win);
     }
 }
 
@@ -119,7 +118,6 @@ static void activateWithKey(NSString *key, UIViewController *presenter) {
                     }
                     
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-                    NSLog(@"[FemBabe] Activate response: %@", json);
                     
                     if ([json[@"ok"] boolValue]) {
                         [[NSUserDefaults standardUserDefaults] setBool:YES forKey:@"FemBabeActivated"];
@@ -154,8 +152,6 @@ static void activateWithKey(NSString *key, UIViewController *presenter) {
         }] resume];
 }
 
-#pragma mark - Show Login UI
-
 static void showLoginUI(void) {
     UIViewController *root = g_overlayWin.rootViewController;
     if (!root) return;
@@ -177,8 +173,6 @@ static void showLoginUI(void) {
     
     [root presentViewController:alert animated:YES completion:nil];
 }
-
-#pragma mark - Overlay Window
 
 @interface FBOverlayWindow : UIWindow
 @end
@@ -204,8 +198,6 @@ static void showLoginUI(void) {
 }
 @end
 
-#pragma mark - Get Active Scene
-
 static UIWindowScene *getActiveScene(void) {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
         if (scene.activationState == UISceneActivationStateForegroundActive &&
@@ -220,8 +212,6 @@ static UIWindowScene *getActiveScene(void) {
     }
     return nil;
 }
-
-#pragma mark - Build Overlay
 
 static void buildOverlay(void) {
     if (g_overlayWin) return;
@@ -255,13 +245,8 @@ static void buildOverlay(void) {
     g_overlayWin = win;
     g_fbButton = btn;
     
-    // Kill B buttons immediately and on timer
     killAllBButtons();
-    
-    NSLog(@"[FemBabe] v19 overlay created");
 }
-
-#pragma mark - Hooks
 
 %hook UIButton
 - (void)setTitle:(NSString *)title forState:(UIControlState)state {
@@ -277,18 +262,10 @@ static void buildOverlay(void) {
 
 %ctor {
     @autoreleasepool {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            buildOverlay();
-        });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            buildOverlay();
-            killAllBButtons();
-        });
-        // Keep killing B for first 10 seconds
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); killAllBButtons(); });
         for (int i = 1; i <= 10; i++) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, i*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-                killAllBButtons();
-            });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, i*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ killAllBButtons(); });
         }
     }
 }
