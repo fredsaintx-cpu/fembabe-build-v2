@@ -1,8 +1,8 @@
-// FemBabe iOS-18 Overlay v12b
+// FemBabe iOS-18 Overlay v14
+// FIX: Activation + smooth drag with UIPanGestureRecognizer
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
-#import <QuartzCore/QuartzCore.h>
 
 #define FEMBABE_TAG 0xFE0BABE
 
@@ -20,9 +20,7 @@ static BOOL isLoggedIn(void) {
     return NO;
 }
 
-@interface FBButton : UIButton {
-    CGPoint _touchOffset;
-}
+@interface FBButton : UIButton
 @end
 
 @implementation FBButton
@@ -37,62 +35,47 @@ static BOOL isLoggedIn(void) {
     }
     
     if (isLoggedIn()) {
+        // Logged in - show settings
         Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
         if (!vcClass) return;
         UIViewController *vc = [[vcClass alloc] init];
         if (!vc) return;
         [g_presentWin.rootViewController presentViewController:vc animated:YES completion:nil];
     } else {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe Login"
-            message:@"Enter your activation key"
-            preferredStyle:UIAlertControllerStyleAlert];
+        // Not logged in - show login alert then present VC with authLoginTapped
+        Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+        if (!vcClass) return;
+        UIViewController *loginVC = [[vcClass alloc] init];
+        if (!loginVC) return;
         
-        [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-            tf.placeholder = @"Activation Key";
-            tf.secureTextEntry = YES;
-        }];
-        
-        [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
-            NSString *key = alert.textFields.firstObject.text;
-            if (key.length > 0) {
-                Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-                if (vcClass) {
-                    id vc = [[vcClass alloc] init];
-                    if ([vc respondsToSelector:@selector(authActivateTapped)]) {
-                        [vc performSelector:@selector(authActivateTapped)];
-                    }
-                }
+        // Present the VC then immediately call authLoginTapped which shows the real login UI
+        [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:^{
+            if ([loginVC respondsToSelector:@selector(authLoginTapped)]) {
+                [loginVC performSelector:@selector(authLoginTapped)];
             }
-        }]];
-        
-        [g_presentWin.rootViewController presentViewController:alert animated:YES completion:nil];
+        }];
     }
 }
 
-- (BOOL)beginTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
-    CGPoint touchPoint = [touch locationInView:self];
-    _touchOffset = CGPointMake(touchPoint.x - self.bounds.size.width/2, touchPoint.y - self.bounds.size.height/2);
-    return YES;
-}
-
-- (BOOL)continueTrackingWithTouch:(UITouch *)touch withEvent:(UIEvent *)event {
+// SMOOTH DRAG: Simple pan gesture with direct position
+- (void)handlePan:(UIPanGestureRecognizer *)pan {
     UIWindow *win = g_overlayWin;
-    if (!win) return YES;
+    if (!win) return;
     
-    CGPoint screenPoint = [touch locationInView:nil];
-    CGPoint newCenter = CGPointMake(screenPoint.x - _touchOffset.x, screenPoint.y - _touchOffset.y);
+    static CGPoint startCenter;
     
-    CGRect screen = [UIScreen mainScreen].bounds;
-    newCenter.x = MAX(25, MIN(screen.size.width - 25, newCenter.x));
-    newCenter.y = MAX(60, MIN(screen.size.height - 25, newCenter.y));
-    
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
-    win.layer.position = newCenter;
-    [CATransaction commit];
-    
-    return YES;
+    if (pan.state == UIGestureRecognizerStateBegan) {
+        startCenter = win.center;
+    } else if (pan.state == UIGestureRecognizerStateChanged) {
+        CGPoint translation = [pan translationInView:nil];
+        CGPoint newCenter = CGPointMake(startCenter.x + translation.x, startCenter.y + translation.y);
+        
+        CGRect screen = [UIScreen mainScreen].bounds;
+        newCenter.x = MAX(25, MIN(screen.size.width - 25, newCenter.x));
+        newCenter.y = MAX(60, MIN(screen.size.height - 25, newCenter.y));
+        
+        win.center = newCenter;
+    }
 }
 
 @end
@@ -152,7 +135,13 @@ static void buildOverlay(void) {
         [btn setTitle:@"F" forState:UIControlStateNormal];
         btn.titleLabel.font = [UIFont boldSystemFontOfSize:22];
         [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
+        
         [btn addTarget:btn action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
+        
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:btn action:@selector(handlePan:)];
+        pan.cancelsTouchesInView = NO;
+        [btn addGestureRecognizer:pan];
+        
         [vc.view addSubview:btn];
         ow.hidden = NO;
         g_overlayWin = ow;
