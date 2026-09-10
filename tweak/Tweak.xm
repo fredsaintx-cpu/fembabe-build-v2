@@ -2,49 +2,16 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <AudioToolbox/AudioToolbox.h>
-#include <notify.h>
-#include <sys/mman.h>
-#include <fcntl.h>
 
-#define NOTIFY_KEY_START    "com.fembabe.vcam.start"
-#define NOTIFY_KEY_STOP     "com.fembabe.vcam.stop"
-#define NOTIFY_KEY_STATUS   "com.fembabe.vcam.status"
-#define SHARED_MEM_PATH     "/tmp/vcam_fembabe_state.bin"
-
-typedef struct {
-    char deviceId[128];
-    char userId[128];
-    int isConnected;
-    int64_t lastHeartbeat;
-    int64_t expireAt;
-} VCamState;
-
+// Simple overlay - no iOS 18 specific code, let daemon handle network
 static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
 static BOOL g_isAuthed = NO;
-static BOOL g_isIOS18 = NO;
 static id g_settingsVC = nil;
-static VCamState *g_sharedState = NULL;
 
 static void showActivationAlert(void);
-
-// Setup shared memory for daemon communication
-static void setupSharedMemory(void) {
-    int fd = open(SHARED_MEM_PATH, O_RDWR | O_CREAT, 0666);
-    if (fd < 0) return;
-    ftruncate(fd, sizeof(VCamState));
-    g_sharedState = (VCamState *)mmap(NULL, sizeof(VCamState), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    close(fd);
-    if (g_sharedState == MAP_FAILED) g_sharedState = NULL;
-}
-
-// Check if iOS 18+
-static BOOL isIOS18OrLater(void) {
-    NSOperatingSystemVersion v = [[NSProcessInfo processInfo] operatingSystemVersion];
-    return v.majorVersion >= 18;
-}
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
@@ -60,8 +27,7 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
 static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *vc, BOOL animated, void (^completion)(void)) {
     if ([vc isKindOfClass:[UIAlertController class]]) {
         UIAlertController *alert = (UIAlertController *)vc;
-        NSString *title = alert.title;
-        if (title && [title containsString:@"Login"]) {
+        if (alert.title && [alert.title containsString:@"Login"]) {
             dispatch_async(dispatch_get_main_queue(), ^{ showActivationAlert(); });
             if (completion) completion();
             return;
@@ -70,9 +36,9 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
     ((void(*)(id,SEL,id,BOOL,id))orig_presentVC)(self, _cmd, vc, animated, completion);
 }
 
-@interface FBPresentWindow : UIWindow
+@interface FBWindow : UIWindow
 @end
-@implementation FBPresentWindow
+@implementation FBWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = [super hitTest:point withEvent:event];
     return (hit == self || hit == self.rootViewController.view) ? nil : hit;
@@ -88,17 +54,13 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
 - (void)handleTap {
     AudioServicesPlaySystemSound(1519);
     if (g_isAuthed && g_settingsVC) {
-        UIViewController *presented = overlayWindow.rootViewController.presentedViewController;
-        if (presented) {
-            [presented dismissViewControllerAnimated:YES completion:nil];
-        } else {
-            [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:nil];
-        }
+        UIViewController *p = overlayWindow.rootViewController.presentedViewController;
+        if (p) [p dismissViewControllerAnimated:YES completion:nil];
+        else [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:nil];
         return;
     }
     showActivationAlert();
 }
-
 - (void)handlePan:(UIPanGestureRecognizer *)g {
     if (g.state == UIGestureRecognizerStateBegan) {
         self.dragStart = [g locationInView:overlayWindow];
@@ -109,7 +71,7 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
 }
 @end
 
-static void doDirectLogin(NSString *key) {
+static void doLogin(NSString *key) {
     Class apiClass = NSClassFromString(@"iCdfsIdfdEdfsNdfdftqWer");
     if (!apiClass) return;
     
@@ -124,37 +86,20 @@ static void doDirectLogin(NSString *key) {
     
     [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:^{
         NSURL *url = [NSURL URLWithString:@"https://v.fembabe.org/api/vcam/login2"];
-        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-        request.HTTPMethod = @"POST";
-        [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+        NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
+        req.HTTPMethod = @"POST";
+        [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+        req.HTTPBody = [[NSString stringWithFormat:@"{\"username\":\"%@\",\"password\":\"%@\"}", key, key] dataUsingEncoding:NSUTF8StringEncoding];
         
-        NSDictionary *body = @{@"username": key, @"password": key};
-        request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-        
-        NSURLSession *session = [NSURLSession sharedSession];
-        [[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *r, NSError *e) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (data && !error) {
+                if (data && !e) {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if ([json[@"ok"] boolValue]) {
                         ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
                         g_isAuthed = YES;
-                        
-                        // iOS 18: Write deviceId to shared memory and signal daemon
-                        if (g_isIOS18 && g_sharedState) {
-                            NSDictionary *license = json[@"license"];
-                            NSString *deviceId = license[@"deviceId"] ?: @"";
-                            NSString *userId = license[@"userId"] ?: @"";
-                            strncpy(g_sharedState->deviceId, [deviceId UTF8String], 127);
-                            strncpy(g_sharedState->userId, [userId UTF8String], 127);
-                            g_sharedState->isConnected = 0;
-                            
-                            // Signal daemon to start heartbeat
-                            notify_post(NOTIFY_KEY_START);
-                        }
                     } else {
-                        NSString *errMsg = json[@"error"] ?: @"Invalid key";
-                        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), errMsg);
+                        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), json[@"error"] ?: @"Invalid key");
                     }
                 } else {
                     ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), @"Network error");
@@ -165,41 +110,20 @@ static void doDirectLogin(NSString *key) {
 }
 
 static void showActivationAlert(void) {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe"
-                                                                   message:g_isIOS18 ? @"Enter activation key (iOS 18 mode)" : @"Enter activation key"
-                                                            preferredStyle:UIAlertControllerStyleAlert];
-    
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe" message:@"Enter activation key" preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
         tf.placeholder = @"XXXX-XXXX-XXXX-XXXX";
         tf.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
     }];
-    
-    [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         NSString *key = alert.textFields.firstObject.text;
-        if (key.length == 0) return;
-        g_isAuthed = NO;
-        doDirectLogin(key);
+        if (key.length > 0) { g_isAuthed = NO; doLogin(key); }
     }]];
-    
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [overlayWindow.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
 %ctor {
-    g_isIOS18 = isIOS18OrLater();
-    
-    if (g_isIOS18) {
-        setupSharedMemory();
-        
-        // Listen for daemon status updates
-        int statusToken;
-        notify_register_dispatch(NOTIFY_KEY_STATUS, &statusToken, dispatch_get_main_queue(), ^(int token) {
-            if (g_sharedState && g_sharedState->isConnected) {
-                // Daemon confirmed connected - update UI if needed
-            }
-        });
-    }
-    
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
     if (m1) orig_setTitle = method_setImplementation(m1, (IMP)hook_setTitle);
     Method m2 = class_getInstanceMethod([UIView class], @selector(addSubview:));
@@ -208,32 +132,30 @@ static void showActivationAlert(void) {
     if (m3) orig_presentVC = method_setImplementation(m3, (IMP)hook_presentVC);
     
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        @autoreleasepool {
-            UIWindowScene *scene = nil;
-            for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
-                if ([s isKindOfClass:[UIWindowScene class]] && s.activationState == UISceneActivationStateForegroundActive) {
-                    scene = (UIWindowScene *)s; break;
-                }
+        UIWindowScene *scene = nil;
+        for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
+            if ([s isKindOfClass:[UIWindowScene class]] && s.activationState == UISceneActivationStateForegroundActive) {
+                scene = (UIWindowScene *)s; break;
             }
-            if (!scene) return;
-            
-            overlayWindow = [[FBPresentWindow alloc] initWithWindowScene:scene];
-            overlayWindow.frame = UIScreen.mainScreen.bounds;
-            overlayWindow.windowLevel = UIWindowLevelAlert + 100;
-            overlayWindow.backgroundColor = UIColor.clearColor;
-            overlayWindow.rootViewController = [UIViewController new];
-            overlayWindow.hidden = NO;
-            
-            FBButton *btn = [[FBButton alloc] initWithFrame:CGRectMake(20,100,50,50)];
-            btn.backgroundColor = [UIColor colorWithRed:0.4 green:0.0 blue:0.6 alpha:1.0];
-            [btn setTitle:@"F" forState:UIControlStateNormal];
-            [btn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-            btn.titleLabel.font = [UIFont boldSystemFontOfSize:24];
-            btn.layer.cornerRadius = 25;
-            btn.clipsToBounds = YES;
-            [btn addTarget:btn action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
-            [btn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:btn action:@selector(handlePan:)]];
-            [overlayWindow addSubview:btn];
         }
+        if (!scene) return;
+        
+        overlayWindow = [[FBWindow alloc] initWithWindowScene:scene];
+        overlayWindow.frame = UIScreen.mainScreen.bounds;
+        overlayWindow.windowLevel = UIWindowLevelAlert + 100;
+        overlayWindow.backgroundColor = UIColor.clearColor;
+        overlayWindow.rootViewController = [UIViewController new];
+        overlayWindow.hidden = NO;
+        
+        FBButton *btn = [[FBButton alloc] initWithFrame:CGRectMake(20,100,50,50)];
+        btn.backgroundColor = [UIColor colorWithRed:0.4 green:0.0 blue:0.6 alpha:1.0];
+        [btn setTitle:@"F" forState:UIControlStateNormal];
+        [btn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+        btn.titleLabel.font = [UIFont boldSystemFontOfSize:24];
+        btn.layer.cornerRadius = 25;
+        btn.clipsToBounds = YES;
+        [btn addTarget:btn action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
+        [btn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:btn action:@selector(handlePan:)]];
+        [overlayWindow addSubview:btn];
     });
 }
