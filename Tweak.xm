@@ -41,14 +41,11 @@ static UIWindow *overlayWindow = nil;
         id vc = [[cls alloc] init];
         if (!vc) return;
         
-        // Set server, username, password
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
         
-        // Present VC
         [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
-            // Call login after presented
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                 ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
             });
@@ -69,17 +66,10 @@ static UIWindow *overlayWindow = nil;
 }
 @end
 
-static IMP origSetTitle = NULL;
-static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
-    if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
-    ((void(*)(id,SEL,id,UIControlState))origSetTitle)(self, _cmd, title, state);
-}
+// NO B blocking here - fembabe_hook.dylib handles it
 
 %ctor {
     @autoreleasepool {
-        Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
-        if (m) origSetTitle = method_setImplementation(m, (IMP)hook_setTitle);
-        
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             UIWindowScene *scene = nil;
             for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
@@ -96,7 +86,6 @@ static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlSt
             overlayWindow.rootViewController = [UIViewController new];
             overlayWindow.hidden = NO;
             
-            // TRUE PURPLE: RGB(128, 0, 128) = 0.5, 0, 0.5
             FBButton *btn = [[FBButton alloc] initWithFrame:CGRectMake(20,100,50,50)];
             btn.backgroundColor = [UIColor colorWithRed:0.4 green:0.0 blue:0.6 alpha:1.0];
             [btn setTitle:@"F" forState:UIControlStateNormal];
