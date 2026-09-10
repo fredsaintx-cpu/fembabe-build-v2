@@ -1,8 +1,7 @@
 Package: com.fembabe.overlay
 Name: FemBabe Overlay
-Version: 1.1.8-ios18
+Version: 1.1.17
 Architecture: iphoneos-arm64
-Description: FemBabe iOS 18 Overlay
-Maintainer: FemBabe
+Description: FemBabe camera overlay with direct API activation
 Author: FemBabe
 Section: Tweaks
