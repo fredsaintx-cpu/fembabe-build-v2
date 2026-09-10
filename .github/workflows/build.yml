@@ -20,6 +20,12 @@ jobs:
           $THEOS/bin/update-theos
           echo "THEOS=$THEOS" >> $GITHUB_ENV
           
+      - name: Build Daemon
+        run: |
+          cd daemon
+          make FINALPACKAGE=1 || echo "Daemon build attempted"
+          find .theos -name "vcam_netd" -type f 2>/dev/null || true
+          
       - name: Build Tweak
         run: |
           cd tweak

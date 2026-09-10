@@ -1,22 +1,13 @@
-// vcam_netd - FemBabe network daemon for iOS 18
-// Handles heartbeat/connection to v.fembabe.org as root (bypasses sandbox)
-
 #import <Foundation/Foundation.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
 #include <notify.h>
 #include <sys/mman.h>
 #include <fcntl.h>
 
-#define NOTIFY_KEY_START    "com.fembabe.vcam.start"
-#define NOTIFY_KEY_STOP     "com.fembabe.vcam.stop"
-#define NOTIFY_KEY_STATUS   "com.fembabe.vcam.status"
-#define SHARED_MEM_PATH     "/tmp/vcam_fembabe_state.bin"
-#define SERVER_URL          "https://v.fembabe.org"
+#define NOTIFY_START    "com.fembabe.vcam.start"
+#define NOTIFY_STOP     "com.fembabe.vcam.stop"
+#define NOTIFY_STATUS   "com.fembabe.vcam.status"
+#define SHARED_PATH     "/tmp/vcam_fembabe_state.bin"
 
-// Shared state structure
 typedef struct {
     char deviceId[128];
     char userId[128];
@@ -25,106 +16,64 @@ typedef struct {
     int64_t expireAt;
 } VCamState;
 
-static VCamState *g_sharedState = NULL;
-static BOOL g_running = YES;
-static NSTimer *g_heartbeatTimer = nil;
+static VCamState *g_state = NULL;
+static NSTimer *g_timer = nil;
 
-static void setupSharedMemory(void) {
-    int fd = open(SHARED_MEM_PATH, O_RDWR | O_CREAT, 0666);
-    if (fd < 0) {
-        NSLog(@"[vcam_netd] Failed to open shared mem");
-        return;
-    }
+static void setupMem(void) {
+    int fd = open(SHARED_PATH, O_RDWR | O_CREAT, 0666);
+    if (fd < 0) return;
     ftruncate(fd, sizeof(VCamState));
-    g_sharedState = mmap(NULL, sizeof(VCamState), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    g_state = (VCamState *)mmap(NULL, sizeof(VCamState), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    
-    if (g_sharedState == MAP_FAILED) {
-        NSLog(@"[vcam_netd] mmap failed");
-        g_sharedState = NULL;
-    } else {
-        NSLog(@"[vcam_netd] Shared memory ready");
-    }
+    if (g_state == MAP_FAILED) g_state = NULL;
 }
 
 static void doHeartbeat(void) {
-    if (!g_sharedState || strlen(g_sharedState->deviceId) == 0) return;
+    if (!g_state || strlen(g_state->deviceId) == 0) return;
     
-    NSString *deviceId = [NSString stringWithUTF8String:g_sharedState->deviceId];
+    NSString *deviceId = [NSString stringWithUTF8String:g_state->deviceId];
     NSURL *url = [NSURL URLWithString:@"https://v.fembabe.org/api/vcam/heartbeat"];
     NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
     req.HTTPMethod = @"POST";
     [req setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+    req.HTTPBody = [[NSString stringWithFormat:@"{\"deviceId\":\"%@\"}", deviceId] dataUsingEncoding:NSUTF8StringEncoding];
     
-    NSDictionary *body = @{@"deviceId": deviceId};
-    req.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
-    
-    NSURLSession *session = [NSURLSession sharedSession];
-    [[session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
+    [[[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (data && !err) {
             NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
             if ([json[@"ok"] boolValue]) {
-                g_sharedState->isConnected = 1;
-                g_sharedState->lastHeartbeat = (int64_t)[[NSDate date] timeIntervalSince1970];
-                notify_post(NOTIFY_KEY_STATUS);
-                NSLog(@"[vcam_netd] Heartbeat OK");
+                g_state->isConnected = 1;
+                g_state->lastHeartbeat = (int64_t)[[NSDate date] timeIntervalSince1970];
+                notify_post(NOTIFY_STATUS);
+                NSLog(@"[vcam_netd] heartbeat OK");
             }
-        } else {
-            NSLog(@"[vcam_netd] Heartbeat failed: %@", err);
         }
     }] resume];
 }
 
-static void startHeartbeatLoop(void) {
-    if (g_heartbeatTimer) return;
-    
+static void startLoop(void) {
+    if (g_timer) return;
     dispatch_async(dispatch_get_main_queue(), ^{
-        g_heartbeatTimer = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) {
-            doHeartbeat();
-        }];
-        // Immediate first heartbeat
         doHeartbeat();
+        g_timer = [NSTimer scheduledTimerWithTimeInterval:30.0 repeats:YES block:^(NSTimer *t) { doHeartbeat(); }];
     });
-    NSLog(@"[vcam_netd] Heartbeat loop started");
 }
 
-static void stopHeartbeatLoop(void) {
-    if (g_heartbeatTimer) {
-        [g_heartbeatTimer invalidate];
-        g_heartbeatTimer = nil;
-    }
-    if (g_sharedState) {
-        g_sharedState->isConnected = 0;
-        notify_post(NOTIFY_KEY_STATUS);
-    }
-    NSLog(@"[vcam_netd] Heartbeat loop stopped");
+static void stopLoop(void) {
+    [g_timer invalidate]; g_timer = nil;
+    if (g_state) { g_state->isConnected = 0; notify_post(NOTIFY_STATUS); }
 }
 
 int main(int argc, char *argv[]) {
     @autoreleasepool {
-        NSLog(@"[vcam_netd] Starting FemBabe network daemon for iOS 18+");
+        NSLog(@"[vcam_netd] iOS 18 network daemon starting");
+        setupMem();
         
-        setupSharedMemory();
+        int t1, t2;
+        notify_register_dispatch(NOTIFY_START, &t1, dispatch_get_main_queue(), ^(int t) { startLoop(); });
+        notify_register_dispatch(NOTIFY_STOP, &t2, dispatch_get_main_queue(), ^(int t) { stopLoop(); });
         
-        // Register for start notification
-        int startToken;
-        notify_register_dispatch(NOTIFY_KEY_START, &startToken, dispatch_get_main_queue(), ^(int token) {
-            NSLog(@"[vcam_netd] Received START signal");
-            startHeartbeatLoop();
-        });
-        
-        // Register for stop notification
-        int stopToken;
-        notify_register_dispatch(NOTIFY_KEY_STOP, &stopToken, dispatch_get_main_queue(), ^(int token) {
-            NSLog(@"[vcam_netd] Received STOP signal");
-            stopHeartbeatLoop();
-        });
-        
-        NSLog(@"[vcam_netd] Daemon ready, waiting for signals...");
-        
-        // Run forever
         [[NSRunLoop mainRunLoop] run];
-        
         return 0;
     }
 }
