@@ -1,24 +1,11 @@
-// FemBabe iOS-18 Overlay v14
-// FIX: Activation + smooth drag with UIPanGestureRecognizer
+// FemBabe iOS-18 Overlay v15 - SIMPLE
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
-#import <objc/message.h>
 
 #define FEMBABE_TAG 0xFE0BABE
 
 static UIWindow *g_overlayWin = nil;
 static UIWindow *g_presentWin = nil;
-
-static BOOL isLoggedIn(void) {
-    Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-    if (!vcClass) return NO;
-    id vc = [[vcClass alloc] init];
-    if (!vc) return NO;
-    if ([vc respondsToSelector:@selector(loggedin)]) {
-        return ((BOOL(*)(id, SEL))objc_msgSend)(vc, @selector(loggedin));
-    }
-    return NO;
-}
 
 @interface FBButton : UIButton
 @end
@@ -26,38 +13,37 @@ static BOOL isLoggedIn(void) {
 @implementation FBButton
 
 - (void)handleTap {
+    NSLog(@"[FemBabe] F tapped!");
+    
     UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [h impactOccurred];
     
+    // Dismiss if already showing
     if (g_presentWin.rootViewController.presentedViewController) {
+        NSLog(@"[FemBabe] Dismissing...");
         [g_presentWin.rootViewController dismissViewControllerAnimated:YES completion:nil];
         return;
     }
     
-    if (isLoggedIn()) {
-        // Logged in - show settings
-        Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-        if (!vcClass) return;
-        UIViewController *vc = [[vcClass alloc] init];
-        if (!vc) return;
-        [g_presentWin.rootViewController presentViewController:vc animated:YES completion:nil];
-    } else {
-        // Not logged in - show login alert then present VC with authLoginTapped
-        Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-        if (!vcClass) return;
-        UIViewController *loginVC = [[vcClass alloc] init];
-        if (!loginVC) return;
-        
-        // Present the VC then immediately call authLoginTapped which shows the real login UI
-        [g_presentWin.rootViewController presentViewController:loginVC animated:YES completion:^{
-            if ([loginVC respondsToSelector:@selector(authLoginTapped)]) {
-                [loginVC performSelector:@selector(authLoginTapped)];
-            }
-        }];
-    }
+    // Get the VC class
+    Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+    NSLog(@"[FemBabe] VC class: %@", vcClass);
+    if (!vcClass) return;
+    
+    // Create and present
+    UIViewController *vc = [[vcClass alloc] init];
+    NSLog(@"[FemBabe] VC instance: %@", vc);
+    if (!vc) return;
+    
+    NSLog(@"[FemBabe] Presenting...");
+    [g_presentWin.rootViewController presentViewController:vc animated:YES completion:^{
+        NSLog(@"[FemBabe] Presented! Calling authLoginTapped...");
+        if ([vc respondsToSelector:@selector(authLoginTapped)]) {
+            [vc performSelector:@selector(authLoginTapped)];
+        }
+    }];
 }
 
-// SMOOTH DRAG: Simple pan gesture with direct position
 - (void)handlePan:(UIPanGestureRecognizer *)pan {
     UIWindow *win = g_overlayWin;
     if (!win) return;
@@ -109,7 +95,12 @@ static void buildOverlay(void) {
     dispatch_async(dispatch_get_main_queue(), ^{
         if (g_overlayWin) return;
         UIWindowScene *scene = activeScene();
-        if (!scene) { dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); }); return; }
+        if (!scene) { 
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); }); 
+            return; 
+        }
+        
+        NSLog(@"[FemBabe] Building overlay with scene: %@", scene);
         
         FBPresentWindow *pw = [[FBPresentWindow alloc] initWithWindowScene:scene];
         pw.frame = [UIScreen mainScreen].bounds;
@@ -139,17 +130,19 @@ static void buildOverlay(void) {
         [btn addTarget:btn action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
         
         UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:btn action:@selector(handlePan:)];
-        pan.cancelsTouchesInView = NO;
         [btn addGestureRecognizer:pan];
         
         [vc.view addSubview:btn];
         ow.hidden = NO;
         g_overlayWin = ow;
+        
+        NSLog(@"[FemBabe] Overlay ready!");
     });
 }
 
 __attribute__((constructor)) static void init(void) {
     @autoreleasepool {
+        NSLog(@"[FemBabe] Init starting...");
         Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
         orig_setTitle = method_setImplementation(m, (IMP)hook_setTitle);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); });
