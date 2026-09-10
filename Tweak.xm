@@ -6,6 +6,7 @@
 static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
+static id g_settingsVC = nil;
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
@@ -33,15 +34,16 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
 @end
 
 @implementation FBButton
+
 - (void)handleTap {
     AudioServicesPlaySystemSound(1519);
     
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe Login"
-                                                                   message:@"Enter your activation key"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe"
+                                                                   message:@"Enter activation key"
                                                             preferredStyle:UIAlertControllerStyleAlert];
     
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
-        tf.placeholder = @"Activation Key";
+        tf.placeholder = @"XXXX-XXXX-XXXX-XXXX";
         tf.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
     }];
     
@@ -49,25 +51,28 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
         NSString *key = alert.textFields.firstObject.text;
         if (key.length == 0) return;
         
-        Class cls = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-        if (!cls) return;
-        id vc = [[cls alloc] init];
-        if (!vc) return;
+        // Get login API and set URL
+        Class apiClass = NSClassFromString(@"iCdfsIdfdEdfsNdfdftqWer");
+        if (!apiClass) return;
         
-        // Set server BEFORE present
-        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
+        id api = ((id(*)(id,SEL))objc_msgSend)(apiClass, @selector(sharedInstance));
+        ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setUrl:), @"https://v.fembabe.org");
         
-        // Present, then set credentials AFTER viewDidLoad and call login
-        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
-            // Now view is loaded - set credentials
-            ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
-            ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
-            
-            // Small delay then call login
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
-            });
-        }];
+        // Create Settings VC for the callback
+        Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+        g_settingsVC = [[vcClass alloc] init];
+        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setServer:), @"https://v.fembabe.org");
+        
+        // Call login API directly with VC as callback target
+        // login:password:callback: expects the VC to have loggedin and loginError: methods
+        ((void(*)(id,SEL,id,id,id))objc_msgSend)(api, @selector(login:password:callback:), key, key, g_settingsVC);
+        
+        // Present the VC after a delay to show results
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1000*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            if (g_settingsVC) {
+                [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:nil];
+            }
+        });
     }]];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
