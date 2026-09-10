@@ -1,5 +1,4 @@
 // FemBabe Overlay v17 - Direct API Activation
-// Clean UI + HTTP POST to v.fembabe.org/api/vcam/activate
 
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -7,13 +6,8 @@
 
 #define FEMBABE_TAG 0xFB0017
 
-#pragma mark - Globals
-
 static UIWindow *g_overlayWin = nil;
 static UIButton *g_fbButton = nil;
-static CGPoint g_dragStart;
-
-#pragma mark - Get Device Public Key
 
 static NSString *getDevicePubKey(void) {
     Class vcamClass = objc_getClass("ifdsflwoWdasdYfsdfJd");
@@ -30,8 +24,6 @@ static NSString *getDevicePubKey(void) {
     }
     return @"";
 }
-
-#pragma mark - API Activation
 
 static void activateWithKey(NSString *key, UIViewController *presenter) {
     if (!key || key.length == 0) {
@@ -75,7 +67,6 @@ static void activateWithKey(NSString *key, UIViewController *presenter) {
                         [[NSUserDefaults standardUserDefaults] setObject:key forKey:@"FemBabeKey"];
                         [[NSUserDefaults standardUserDefaults] synchronize];
                         
-                        // Call login2
                         NSURL *login2Url = [NSURL URLWithString:@"https://v.fembabe.org/api/vcam/login2"];
                         NSMutableURLRequest *login2Req = [NSMutableURLRequest requestWithURL:login2Url];
                         login2Req.HTTPMethod = @"POST";
@@ -104,8 +95,6 @@ static void activateWithKey(NSString *key, UIViewController *presenter) {
         }] resume];
 }
 
-#pragma mark - Show Login UI
-
 static void showLoginUI(void) {
     UIViewController *root = g_overlayWin.rootViewController;
     if (!root) return;
@@ -128,8 +117,6 @@ static void showLoginUI(void) {
     [root presentViewController:alert animated:YES completion:nil];
 }
 
-#pragma mark - Overlay Window
-
 @interface FBOverlayWindow : UIWindow
 @end
 @implementation FBOverlayWindow
@@ -141,33 +128,18 @@ static void showLoginUI(void) {
 }
 @end
 
-#pragma mark - Draggable Button
-
 @interface FBButton : UIButton
-@property (nonatomic) CGPoint startCenter;
 @end
-
 @implementation FBButton
-
-- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
-    [super touchesBegan:touches withEvent:event];
-    self.startCenter = self.window.center;
-}
-
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     [super touchesMoved:touches withEvent:event];
     UITouch *touch = [touches anyObject];
     CGPoint prev = [touch previousLocationInView:nil];
     CGPoint curr = [touch locationInView:nil];
-    CGFloat dx = curr.x - prev.x;
-    CGFloat dy = curr.y - prev.y;
     UIWindow *win = self.window;
-    win.center = CGPointMake(win.center.x + dx, win.center.y + dy);
+    win.center = CGPointMake(win.center.x + (curr.x - prev.x), win.center.y + (curr.y - prev.y));
 }
-
 @end
-
-#pragma mark - Get Active Scene
 
 static UIWindowScene *getActiveScene(void) {
     for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
@@ -184,11 +156,8 @@ static UIWindowScene *getActiveScene(void) {
     return nil;
 }
 
-#pragma mark - Build Overlay
-
 static void buildOverlay(void) {
     if (g_overlayWin) return;
-    
     UIWindowScene *scene = getActiveScene();
     if (!scene) return;
     
@@ -207,7 +176,7 @@ static void buildOverlay(void) {
     [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
     btn.titleLabel.font = [UIFont boldSystemFontOfSize:24];
     
-    [btn addAction:[UIAction actionWithHandler:^(UIAction *action) {
+    [btn addAction:[UIAction actionWithHandler:^(__unused UIAction *action) {
         UIImpactFeedbackGenerator *haptic = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
         [haptic impactOccurred];
         showLoginUI();
@@ -217,11 +186,8 @@ static void buildOverlay(void) {
     win.hidden = NO;
     g_overlayWin = win;
     g_fbButton = btn;
-    
-    NSLog(@"[FemBabe] v17 overlay - Direct API activation");
+    NSLog(@"[FemBabe] v17 overlay - Direct API");
 }
-
-#pragma mark - Block B Button
 
 %hook UIButton
 - (void)setTitle:(NSString *)title forState:(UIControlState)state {
