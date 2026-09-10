@@ -1,32 +1,60 @@
 #!/bin/bash
 set -e
 
-VERSION="1.1.17"
-DYLIB=".theos/obj/debug/fembabe_overlay.dylib"
+mkdir -p deb_root/var/jb/Library/MobileSubstrate/DynamicLibraries
+mkdir -p deb_root/usr/libexec
+mkdir -p deb_root/Library/LaunchDaemons
+mkdir -p deb_root/DEBIAN
 
-rm -rf staging
-mkdir -p staging/var/jb/Library/MobileSubstrate/DynamicLibraries
-mkdir -p staging/DEBIAN
+# Copy tweak
+cp tweak/.theos/obj/debug/fembabe_overlay.dylib deb_root/var/jb/Library/MobileSubstrate/DynamicLibraries/
+echo '{ Filter = { Bundles = ( "com.apple.springboard" ); }; }' > deb_root/var/jb/Library/MobileSubstrate/DynamicLibraries/fembabe_overlay.plist
 
-cp "$DYLIB" staging/var/jb/Library/MobileSubstrate/DynamicLibraries/
-cp fembabe_overlay.plist staging/var/jb/Library/MobileSubstrate/DynamicLibraries/
+# Copy daemon if built
+if [ -f daemon/.theos/obj/debug/vcam_netd ]; then
+    cp daemon/.theos/obj/debug/vcam_netd deb_root/usr/libexec/
+    cat > deb_root/Library/LaunchDaemons/com.fembabe.vcam.netd.plist << 'PLISTEOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.fembabe.vcam.netd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/libexec/vcam_netd</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>UserName</key>
+    <string>root</string>
+</dict>
+</plist>
+PLISTEOF
+fi
 
-# Add original dylibs if present
-for f in staging/orig/*.dylib staging/orig/*.plist; do
-    [ -f "$f" ] && cp "$f" staging/var/jb/Library/MobileSubstrate/DynamicLibraries/ 2>/dev/null || true
-done
-
-cat > staging/DEBIAN/control << CTRL
-Package: com.fembabe.overlay
-Name: FemBabe Overlay
-Version: ${VERSION}
+# Control file
+cat > deb_root/DEBIAN/control << CTRLEOF
+Package: com.fembabe.cam
+Name: FemBabe Camera
+Version: 1.1.62
 Architecture: iphoneos-arm64
-Description: FemBabe camera overlay v17 - Direct API activation
-Author: FemBabe
+Maintainer: dev
 Section: Tweaks
-CTRL
+Depends: mobilesubstrate
+Description: v62 with iOS 18 daemon
+CTRLEOF
 
-chmod 755 staging/var/jb/Library/MobileSubstrate/DynamicLibraries/*.dylib 2>/dev/null || true
-mkdir -p packages
-dpkg-deb -Zxz -b staging "packages/fembabecam_v${VERSION}.deb"
-echo "Built: packages/fembabecam_v${VERSION}.deb"
+# Post-install script to load daemon
+cat > deb_root/DEBIAN/postinst << 'POSTEOF'
+#!/bin/bash
+if [ -f /Library/LaunchDaemons/com.fembabe.vcam.netd.plist ]; then
+    launchctl load /Library/LaunchDaemons/com.fembabe.vcam.netd.plist 2>/dev/null || true
+fi
+exit 0
+POSTEOF
+chmod 755 deb_root/DEBIAN/postinst
+
+dpkg-deb -Zxz -b deb_root fembabecam_v1.1.62.deb

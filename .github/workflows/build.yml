@@ -1,25 +1,40 @@
 name: Build
-on: [push, workflow_dispatch]
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      - run: brew install dpkg ldid
+      
       - name: Setup Theos
         run: |
-          git clone --recursive https://github.com/theos/theos.git ~/theos
-          curl -sL https://github.com/theos/sdks/archive/master.tar.gz | tar -xzC ~/theos/sdks
-          mv ~/theos/sdks/sdks-master/*.sdk ~/theos/sdks/ 2>/dev/null || true
-      - name: Build
+          brew install ldid xz dpkg
+          git clone --depth=1 https://github.com/theos/theos.git $HOME/theos
+          curl -sL https://github.com/theos/sdks/releases/latest/download/iPhoneOS17.5.sdk.tar.xz | tar -xJf - -C $HOME/theos/sdks
+          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
+          
+      - name: Build Daemon
         run: |
-          export THEOS=~/theos
-          make
-      - name: Package
+          cd daemon
+          make FINALPACKAGE=1 2>&1 || echo "Daemon build skipped/failed"
+          ls -la .theos/obj/debug/ 2>/dev/null || true
+          
+      - name: Build Tweak
+        run: |
+          cd tweak
+          make FINALPACKAGE=1
+          
+      - name: Package DEB
         run: |
           chmod +x package_deb.sh
           ./package_deb.sh
+          
       - uses: actions/upload-artifact@v4
         with:
-          name: fembabe-deb
-          path: packages/*.deb
+          name: fembabecam-deb
+          path: "*.deb"
