@@ -8,25 +8,24 @@ on:
 jobs:
   build:
     runs-on: macos-latest
+    env:
+      THEOS: /Users/runner/theos
     steps:
       - uses: actions/checkout@v4
 
       - name: Setup Theos
         run: |
           brew install ldid make dpkg
-          git clone --depth=1 https://github.com/theos/theos.git $HOME/theos
-          curl -sL https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz | tar -xJf - -C $HOME/theos/sdks/
+          git clone --depth=1 https://github.com/theos/theos.git $THEOS
+          $THEOS/bin/update-theos
+          curl -sL https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz | tar -xJf - -C $THEOS/sdks/
 
       - name: Build Tweak
-        env:
-          THEOS: /Users/runner/theos
         run: |
           cd tweak
           make FINALPACKAGE=1
 
       - name: Build Daemon
-        env:
-          THEOS: /Users/runner/theos
         run: |
           cd daemon
           make FINALPACKAGE=1
