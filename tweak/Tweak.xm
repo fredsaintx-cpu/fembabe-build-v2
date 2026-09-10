@@ -2,37 +2,85 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <notify.h>
+#import <sys/mman.h>
+#import <fcntl.h>
+
+#define NOTIFY_KEY "com.fembabe.vcam.state"
+#define STATE_FILE "/tmp/vcam_fembabe_state.bin"
+
+// State shared with daemon
+typedef struct {
+    uint8_t isConnected;
+    uint8_t isStreaming;
+    uint32_t frameCount;
+    char serverUrl[256];
+} VCamState;
 
 static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
 static IMP orig_isConnected = NULL;
-static IMP orig_connect = NULL;
+static IMP orig_setRtmp = NULL;
 static BOOL g_isAuthed = NO;
-static BOOL g_forceConnected = NO;
 static id g_settingsVC = nil;
-static id g_vcamMgr = nil;
+static int g_notifyToken = 0;
+static VCamState *g_state = NULL;
 
 static void showActivationAlert(void);
 
-// iOS 18 fix - hook isConnected to return YES after auth
+// Map shared state from daemon
+static void mapSharedState(void) {
+    int fd = open(STATE_FILE, O_RDONLY);
+    if (fd < 0) return;
+    
+    g_state = mmap(NULL, sizeof(VCamState), PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    
+    if (g_state == MAP_FAILED) g_state = NULL;
+}
+
+// Check if daemon is connected
+static BOOL isDaemonConnected(void) {
+    if (!g_state) mapSharedState();
+    return g_state ? (g_state->isConnected != 0) : NO;
+}
+
+// Hook isConnected - check daemon state
 static BOOL hook_isConnected(id self, SEL _cmd) {
-    if (g_forceConnected) return YES;
+    if (isDaemonConnected()) return YES;
     if (orig_isConnected) return ((BOOL(*)(id,SEL))orig_isConnected)(self, _cmd);
     return NO;
 }
 
-// iOS 18 fix - hook connect to skip actual RTMP and fake success
-static void hook_connect(id self, SEL _cmd) {
-    NSLog(@"[FemBabe] connect hooked - forcing connected state");
-    g_vcamMgr = self;
-    // Don't call original - it would try RTMP which iOS 18 blocks
-    // Instead, just set connected state
-    if ([self respondsToSelector:@selector(setIsConnected:)]) {
-        ((void(*)(id,SEL,BOOL))objc_msgSend)(self, @selector(setIsConnected:), YES);
+// Hook setRtmp: to redirect to localhost proxy
+static void hook_setRtmp(id self, SEL _cmd, NSString *rtmpUrl) {
+    NSLog(@"[FemBabe] Original RTMP URL: %@", rtmpUrl);
+    
+    // Replace server with localhost proxy
+    if (rtmpUrl && [rtmpUrl hasPrefix:@"rtmp://"]) {
+        // Extract path after host
+        NSRange hostEnd = [rtmpUrl rangeOfString:@"/" options:0 range:NSMakeRange(7, rtmpUrl.length - 7)];
+        NSString *path = @"";
+        if (hostEnd.location != NSNotFound) {
+            path = [rtmpUrl substringFromIndex:hostEnd.location];
+        }
+        
+        // Redirect to localhost proxy
+        NSString *localUrl = [NSString stringWithFormat:@"rtmp://127.0.0.1:1935%@", path];
+        NSLog(@"[FemBabe] Redirected to: %@", localUrl);
+        
+        // Store original server for daemon
+        if (g_state) {
+            strncpy(g_state->serverUrl, rtmpUrl.UTF8String, 255);
+        }
+        
+        if (orig_setRtmp) ((void(*)(id,SEL,id))orig_setRtmp)(self, _cmd, localUrl);
+        return;
     }
-    g_forceConnected = YES;
+    
+    if (orig_setRtmp) ((void(*)(id,SEL,id))orig_setRtmp)(self, _cmd, rtmpUrl);
 }
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
@@ -120,16 +168,6 @@ static void doLogin(NSString *key) {
                     if ([json[@"ok"] boolValue]) {
                         ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
                         g_isAuthed = YES;
-                        g_forceConnected = YES;
-                        
-                        // Also force connected on vcam manager
-                        Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
-                        if (vcamClass) {
-                            id mgr = ((id(*)(id,SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
-                            if (mgr && [mgr respondsToSelector:@selector(setIsConnected:)]) {
-                                ((void(*)(id,SEL,BOOL))objc_msgSend)(mgr, @selector(setIsConnected:), YES);
-                            }
-                        }
                     } else {
                         ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), json[@"error"] ?: @"Invalid key");
                     }
@@ -149,22 +187,28 @@ static void showActivationAlert(void) {
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         NSString *key = alert.textFields.firstObject.text;
-        if (key.length > 0) { g_isAuthed = NO; g_forceConnected = NO; doLogin(key); }
+        if (key.length > 0) { g_isAuthed = NO; doLogin(key); }
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [overlayWindow.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
 %ctor {
+    // Register for daemon state notifications
+    notify_register_check(NOTIFY_KEY, &g_notifyToken);
+    
+    // Map shared state
+    mapSharedState();
+    
+    // Hook vcam manager
     Class vcamMgr = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
     if (vcamMgr) {
-        // Hook isConnected
         Method m = class_getInstanceMethod(vcamMgr, @selector(isConnected));
         if (m) orig_isConnected = method_setImplementation(m, (IMP)hook_isConnected);
         
-        // Hook connect to prevent actual RTMP connection
-        Method mc = class_getInstanceMethod(vcamMgr, @selector(connect));
-        if (mc) orig_connect = method_setImplementation(mc, (IMP)hook_connect);
+        // Hook setRtmp: to redirect to localhost
+        Method mr = class_getInstanceMethod(vcamMgr, @selector(setRtmp:));
+        if (mr) orig_setRtmp = method_setImplementation(mr, (IMP)hook_setRtmp);
     }
     
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
