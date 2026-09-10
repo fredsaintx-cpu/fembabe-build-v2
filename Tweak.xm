@@ -37,7 +37,7 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
     AudioServicesPlaySystemSound(1519);
     
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe Login"
-                                                                   message:@"Enter key, then tap Login in the panel"
+                                                                   message:@"Enter your activation key"
                                                             preferredStyle:UIAlertControllerStyleAlert];
     
     [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
@@ -45,7 +45,7 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
         tf.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
     }];
     
-    [alert addAction:[UIAlertAction actionWithTitle:@"Continue" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSString *key = alert.textFields.firstObject.text;
         if (key.length == 0) return;
         
@@ -54,18 +54,20 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
         id vc = [[cls alloc] init];
         if (!vc) return;
         
-        // Set server and credentials
+        // Set server BEFORE present
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
-        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
-        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
         
-        // Load view so text fields are populated
-        if ([vc respondsToSelector:@selector(loadViewIfNeeded)]) {
-            ((void(*)(id,SEL))objc_msgSend)(vc, @selector(loadViewIfNeeded));
-        }
-        
-        // Present - user will see login UI and tap Login themselves
-        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:nil];
+        // Present, then set credentials AFTER viewDidLoad and call login
+        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
+            // Now view is loaded - set credentials
+            ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
+            ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
+            
+            // Small delay then call login
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
+            });
+        }];
     }]];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
