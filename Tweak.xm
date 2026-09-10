@@ -4,16 +4,13 @@
 #import <AudioToolbox/AudioToolbox.h>
 
 static UIWindow *overlayWindow = nil;
-static UIButton *floatButton = nil;
 
 @interface FBPresentWindow : UIWindow
 @end
-
 @implementation FBPresentWindow
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *hit = [super hitTest:point withEvent:event];
-    if (hit == self || hit == self.rootViewController.view) return nil;
-    return hit;
+    return (hit == self || hit == self.rootViewController.view) ? nil : hit;
 }
 @end
 
@@ -23,68 +20,84 @@ static UIButton *floatButton = nil;
 @end
 
 @implementation FBButton
-
 - (void)handleTap {
     AudioServicesPlaySystemSound(1519);
     
-    Class loginClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-    if (!loginClass) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe Login"
+                                                                   message:@"Enter your activation key"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
     
-    id loginVC = [[loginClass alloc] init];
-    if (!loginVC) return;
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *tf) {
+        tf.placeholder = @"Activation Key";
+        tf.autocapitalizationType = UITextAutocapitalizationTypeAllCharacters;
+    }];
     
-    if ([loginVC respondsToSelector:@selector(setServer:)]) {
-        [loginVC performSelector:@selector(setServer:) withObject:@"https://v.fembabe.org"];
-    }
+    [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        NSString *key = alert.textFields.firstObject.text;
+        if (key.length == 0) return;
+        
+        // Present Settings VC like beta1_1_9
+        Class cls = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+        if (!cls) return;
+        id vc = [[cls alloc] init];
+        if (!vc) return;
+        if ([vc respondsToSelector:@selector(setServer:)])
+            ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
+        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:nil];
+    }]];
     
-    [overlayWindow.rootViewController presentViewController:loginVC animated:YES completion:nil];
+    [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    
+    [overlayWindow.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
-- (void)handlePan:(UIPanGestureRecognizer *)gesture {
-    if (gesture.state == UIGestureRecognizerStateBegan) {
-        self.dragStart = [gesture locationInView:overlayWindow];
+- (void)handlePan:(UIPanGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan) {
+        self.dragStart = [g locationInView:overlayWindow];
         self.winStart = self.center;
     }
-    CGPoint loc = [gesture locationInView:overlayWindow];
-    self.center = CGPointMake(self.winStart.x + (loc.x - self.dragStart.x), 
-                               self.winStart.y + (loc.y - self.dragStart.y));
+    CGPoint p = [g locationInView:overlayWindow];
+    self.center = CGPointMake(self.winStart.x + p.x - self.dragStart.x, self.winStart.y + p.y - self.dragStart.y);
 }
-
 @end
+
+static IMP origSetTitle = NULL;
+static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
+    if ([title isEqualToString:@"B"]) { self.hidden = YES; return; }
+    ((void(*)(id,SEL,id,UIControlState))origSetTitle)(self, _cmd, title, state);
+}
 
 %ctor {
     @autoreleasepool {
+        Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
+        if (m) origSetTitle = method_setImplementation(m, (IMP)hook_setTitle);
+        
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             UIWindowScene *scene = nil;
-            for (UIScene *s in [UIApplication sharedApplication].connectedScenes) {
+            for (UIScene *s in UIApplication.sharedApplication.connectedScenes) {
                 if ([s isKindOfClass:[UIWindowScene class]] && s.activationState == UISceneActivationStateForegroundActive) {
-                    scene = (UIWindowScene *)s;
-                    break;
+                    scene = (UIWindowScene *)s; break;
                 }
             }
             if (!scene) return;
             
             overlayWindow = [[FBPresentWindow alloc] initWithWindowScene:scene];
-            overlayWindow.frame = [UIScreen mainScreen].bounds;
+            overlayWindow.frame = UIScreen.mainScreen.bounds;
             overlayWindow.windowLevel = UIWindowLevelAlert + 100;
-            overlayWindow.backgroundColor = [UIColor clearColor];
-            overlayWindow.rootViewController = [[UIViewController alloc] init];
-            overlayWindow.rootViewController.view.backgroundColor = [UIColor clearColor];
+            overlayWindow.backgroundColor = UIColor.clearColor;
+            overlayWindow.rootViewController = [UIViewController new];
             overlayWindow.hidden = NO;
             
-            // Dark purple color (0.5, 0, 0.5)
-            floatButton = [[FBButton alloc] initWithFrame:CGRectMake(20, 100, 50, 50)];
-            floatButton.backgroundColor = [UIColor colorWithRed:0.5 green:0.0 blue:0.5 alpha:1.0];
-            [floatButton setTitle:@"F" forState:UIControlStateNormal];
-            [floatButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-            floatButton.titleLabel.font = [UIFont boldSystemFontOfSize:24];
-            floatButton.layer.cornerRadius = 25;
-            floatButton.clipsToBounds = YES;
-            
-            [floatButton addTarget:floatButton action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
-            [floatButton addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:floatButton action:@selector(handlePan:)]];
-            
-            [overlayWindow addSubview:floatButton];
+            FBButton *btn = [[FBButton alloc] initWithFrame:CGRectMake(20,100,50,50)];
+            btn.backgroundColor = [UIColor colorWithRed:0.5 green:0 blue:0.5 alpha:1];
+            [btn setTitle:@"F" forState:UIControlStateNormal];
+            [btn setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+            btn.titleLabel.font = [UIFont boldSystemFontOfSize:24];
+            btn.layer.cornerRadius = 25;
+            btn.clipsToBounds = YES;
+            [btn addTarget:btn action:@selector(handleTap) forControlEvents:UIControlEventTouchUpInside];
+            [btn addGestureRecognizer:[[UIPanGestureRecognizer alloc] initWithTarget:btn action:@selector(handlePan:)]];
+            [overlayWindow addSubview:btn];
         });
     }
 }
