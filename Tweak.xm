@@ -9,12 +9,6 @@ static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
 static NSString *g_pendingKey = nil;
 
-static void showActivationAlert(void);
-
-// Forward declaration for the Settings VC we're hooking
-@interface iMswGsfawYfewewUfdsmn : UIViewController
-@end
-
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
     if (orig_setTitle) ((void(*)(id,SEL,id,UIControlState))orig_setTitle)(self, _cmd, title, state);
@@ -26,31 +20,27 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
     if (orig_addSubview) ((void(*)(id,SEL,id))orig_addSubview)(self, _cmd, view);
 }
 
-// Intercept native login popup - DON'T show it, just trigger the action
 static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *vc, BOOL animated, void (^completion)(void)) {
     if ([vc isKindOfClass:[UIAlertController class]] && g_pendingKey) {
         UIAlertController *alert = (UIAlertController *)vc;
         NSString *title = alert.title;
         
         if (title && [title containsString:@"Login"]) {
-            // Fill the text field
             if (alert.textFields.count > 0) {
                 alert.textFields[0].text = g_pendingKey;
             }
             
-            // Find Confirm action and call its handler WITHOUT presenting
+            // Call handler directly WITHOUT presenting
             for (UIAlertAction *action in alert.actions) {
                 if (action.style == UIAlertActionStyleDefault) {
                     void (^handler)(UIAlertAction *) = [action valueForKey:@"handler"];
-                    if (handler) {
-                        handler(action);
-                    }
+                    if (handler) handler(action);
                     break;
                 }
             }
             g_pendingKey = nil;
             if (completion) completion();
-            return; // Don't present
+            return;
         }
     }
     
@@ -72,18 +62,7 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
 @end
 
 @implementation FBButton
-- (void)handleTap { showActivationAlert(); }
-- (void)handlePan:(UIPanGestureRecognizer *)g {
-    if (g.state == UIGestureRecognizerStateBegan) {
-        self.dragStart = [g locationInView:overlayWindow];
-        self.winStart = self.center;
-    }
-    CGPoint p = [g locationInView:overlayWindow];
-    self.center = CGPointMake(self.winStart.x + p.x - self.dragStart.x, self.winStart.y + p.y - self.dragStart.y);
-}
-@end
-
-static void showActivationAlert(void) {
+- (void)handleTap {
     AudioServicesPlaySystemSound(1519);
     
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe"
@@ -108,7 +87,7 @@ static void showActivationAlert(void) {
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
         
         [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                 ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
             });
         }];
@@ -118,13 +97,15 @@ static void showActivationAlert(void) {
     [overlayWindow.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
-%hook iMswGsfawYfewewUfdsmn
-- (void)logout:(id)sender {
-    [self dismissViewControllerAnimated:YES completion:^{
-        showActivationAlert();
-    }];
+- (void)handlePan:(UIPanGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan) {
+        self.dragStart = [g locationInView:overlayWindow];
+        self.winStart = self.center;
+    }
+    CGPoint p = [g locationInView:overlayWindow];
+    self.center = CGPointMake(self.winStart.x + p.x - self.dragStart.x, self.winStart.y + p.y - self.dragStart.y);
 }
-%end
+@end
 
 %ctor {
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
