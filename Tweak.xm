@@ -7,7 +7,6 @@ static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
-static NSString *g_pendingKey = nil;
 static BOOL g_isAuthed = NO;
 static id g_settingsVC = nil;
 
@@ -24,42 +23,19 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
     if (orig_addSubview) ((void(*)(id,SEL,id))orig_addSubview)(self, _cmd, view);
 }
 
+// Block ALL native Login popups
 static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *vc, BOOL animated, void (^completion)(void)) {
     if ([vc isKindOfClass:[UIAlertController class]]) {
         UIAlertController *alert = (UIAlertController *)vc;
         NSString *title = alert.title;
         
         if (title && [title containsString:@"Login"]) {
-            if (g_pendingKey) {
-                // Fill text field
-                if (alert.textFields.count > 0) {
-                    alert.textFields[0].text = g_pendingKey;
-                }
-                
-                // Present it (required for handler to work), then immediately trigger and dismiss
-                ((void(*)(id,SEL,id,BOOL,id))orig_presentVC)(self, _cmd, vc, NO, ^{
-                    // Trigger confirm action
-                    for (UIAlertAction *action in alert.actions) {
-                        if (action.style == UIAlertActionStyleDefault) {
-                            void (^handler)(UIAlertAction *) = [action valueForKey:@"handler"];
-                            if (handler) handler(action);
-                            break;
-                        }
-                    }
-                    // Dismiss immediately
-                    [vc dismissViewControllerAnimated:NO completion:nil];
-                    g_pendingKey = nil;
-                    if (completion) completion();
-                });
-                return;
-            } else {
-                // No pending key - show our activation
-                dispatch_async(dispatch_get_main_queue(), ^{
-                    showActivationAlert();
-                });
-                if (completion) completion();
-                return;
-            }
+            // Block it, show our activation instead
+            dispatch_async(dispatch_get_main_queue(), ^{
+                showActivationAlert();
+            });
+            if (completion) completion();
+            return;
         }
     }
     
@@ -107,6 +83,54 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
 }
 @end
 
+static void doDirectLogin(NSString *key) {
+    // Get the login API
+    Class apiClass = NSClassFromString(@"iCdfsIdfdEdfsNdfdftqWer");
+    if (!apiClass) return;
+    
+    id api = ((id(*)(id,SEL))objc_msgSend)(apiClass, @selector(sharedInstance));
+    ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setUrl:), @"https://v.fembabe.org");
+    
+    // Create settings VC
+    Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+    g_settingsVC = [[vcClass alloc] init];
+    ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setServer:), @"https://v.fembabe.org");
+    ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setUsername:), key);
+    ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setPassword:), key);
+    
+    // Present the VC first
+    [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:^{
+        // Make HTTP request directly using NSURLSession
+        NSURL *url = [NSURL URLWithString:@"https://v.fembabe.org/api/vcam/login2"];
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+        request.HTTPMethod = @"POST";
+        [request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+        
+        NSDictionary *body = @{@"username": key, @"password": key};
+        request.HTTPBody = [NSJSONSerialization dataWithJSONObject:body options:0 error:nil];
+        
+        NSURLSession *session = [NSURLSession sharedSession];
+        [[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (data && !error) {
+                    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+                    if ([json[@"ok"] boolValue]) {
+                        // Success - call loggedin on the VC
+                        ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
+                        g_isAuthed = YES;
+                    } else {
+                        // Failed
+                        NSString *errMsg = json[@"error"] ?: @"Invalid key";
+                        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), errMsg);
+                    }
+                } else {
+                    ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), @"Network error");
+                }
+            });
+        }] resume];
+    }];
+}
+
 static void showActivationAlert(void) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe"
                                                                    message:@"Enter activation key"
@@ -121,23 +145,8 @@ static void showActivationAlert(void) {
         NSString *key = alert.textFields.firstObject.text;
         if (key.length == 0) return;
         
-        g_pendingKey = [key copy];
         g_isAuthed = NO;
-        
-        Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-        g_settingsVC = [[vcClass alloc] init];
-        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setServer:), @"https://v.fembabe.org");
-        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setUsername:), key);
-        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setPassword:), key);
-        
-        [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:^{
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(login));
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                    g_isAuthed = YES;
-                });
-            });
-        }];
+        doDirectLogin(key);
     }]];
     
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
