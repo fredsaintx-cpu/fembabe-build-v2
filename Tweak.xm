@@ -19,19 +19,17 @@ static UIButton *floatButton = nil;
 }
 @end
 
-// Block B button text
+// Block B button AND hide orange button by setting alpha to 0
 static IMP origSetTitle = NULL;
 static void blockB(id self, SEL _cmd, NSString *title, UIControlState state) {
-    if ([title isEqualToString:@"B"]) return;
+    if ([title isEqualToString:@"B"]) {
+        // Hide the entire button
+        [self setAlpha:0];
+        [self setUserInteractionEnabled:NO];
+        return;
+    }
     ((void(*)(id,SEL,NSString*,UIControlState))origSetTitle)(self, _cmd, title, state);
 }
-
-// Hide the camera's orange float button
-%hook iHsfaTkdhwkzopQfsnwBd
-- (id)initWithFrame:(CGRect)frame {
-    return nil; // Don't create it
-}
-%end
 
 %ctor {
     Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
