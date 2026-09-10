@@ -35,7 +35,7 @@ static void setupSharedMemory(void) {
     int fd = open(SHARED_MEM_PATH, O_RDWR | O_CREAT, 0666);
     if (fd < 0) return;
     ftruncate(fd, sizeof(VCamState));
-    g_sharedState = mmap(NULL, sizeof(VCamState), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    g_sharedState = (VCamState *)mmap(NULL, sizeof(VCamState), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
     if (g_sharedState == MAP_FAILED) g_sharedState = NULL;
 }
