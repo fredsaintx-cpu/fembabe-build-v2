@@ -7,7 +7,6 @@ static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
-static IMP orig_logout = NULL;
 static NSString *g_pendingKey = nil;
 
 static void showActivationAlert(void);
@@ -23,42 +22,33 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
     if (orig_addSubview) ((void(*)(id,SEL,id))orig_addSubview)(self, _cmd, view);
 }
 
-// Hook logout to show our activation alert instead
-static void hook_logout(id self, SEL _cmd, id sender) {
-    // Dismiss the settings panel
-    UIViewController *vc = (UIViewController *)self;
-    [vc dismissViewControllerAnimated:YES completion:^{
-        // Show our activation alert
-        showActivationAlert();
-    }];
-}
-
+// Intercept native login popup - DON'T show it, just trigger the action
 static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *vc, BOOL animated, void (^completion)(void)) {
     if ([vc isKindOfClass:[UIAlertController class]] && g_pendingKey) {
         UIAlertController *alert = (UIAlertController *)vc;
         NSString *title = alert.title;
         
         if (title && [title containsString:@"Login"]) {
+            // Fill the text field
             if (alert.textFields.count > 0) {
                 alert.textFields[0].text = g_pendingKey;
             }
             
-            ((void(*)(id,SEL,id,BOOL,id))orig_presentVC)(self, _cmd, vc, animated, ^{
-                if (completion) completion();
-                
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                    for (UIAlertAction *action in alert.actions) {
-                        if (action.style == UIAlertActionStyleDefault) {
-                            void (^handler)(UIAlertAction *) = [action valueForKey:@"handler"];
-                            if (handler) handler(action);
-                            [vc dismissViewControllerAnimated:YES completion:nil];
-                            break;
-                        }
+            // Find Confirm action and call its handler WITHOUT presenting
+            for (UIAlertAction *action in alert.actions) {
+                if (action.style == UIAlertActionStyleDefault) {
+                    void (^handler)(UIAlertAction *) = [action valueForKey:@"handler"];
+                    if (handler) {
+                        handler(action);
                     }
-                    g_pendingKey = nil;
-                });
-            });
-            return;
+                    break;
+                }
+            }
+            g_pendingKey = nil;
+            
+            // Call completion if provided
+            if (completion) completion();
+            return; // Don't present the alert at all
         }
     }
     
@@ -117,7 +107,7 @@ static void showActivationAlert(void) {
         ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
         
         [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 100*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
                 ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
             });
         }];
@@ -127,6 +117,15 @@ static void showActivationAlert(void) {
     [overlayWindow.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
+%hook iMswGsfawYfewewUfdsmn
+- (void)logout:(id)sender {
+    // Dismiss and show our activation alert
+    [self dismissViewControllerAnimated:YES completion:^{
+        showActivationAlert();
+    }];
+}
+%end
+
 %ctor {
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
     if (m1) orig_setTitle = method_setImplementation(m1, (IMP)hook_setTitle);
@@ -134,13 +133,6 @@ static void showActivationAlert(void) {
     if (m2) orig_addSubview = method_setImplementation(m2, (IMP)hook_addSubview);
     Method m3 = class_getInstanceMethod([UIViewController class], @selector(presentViewController:animated:completion:));
     if (m3) orig_presentVC = method_setImplementation(m3, (IMP)hook_presentVC);
-    
-    // Hook logout on Settings VC
-    Class settingsVC = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-    if (settingsVC) {
-        Method m4 = class_getInstanceMethod(settingsVC, @selector(logout:));
-        if (m4) orig_logout = method_setImplementation(m4, (IMP)hook_logout);
-    }
     
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         @autoreleasepool {
