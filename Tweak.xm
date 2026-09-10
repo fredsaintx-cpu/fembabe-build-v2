@@ -1,17 +1,11 @@
-// FemBabe iOS-18 Overlay v9
-// FIXES: Smoother drag, proper login screen, darker purple
-
+// FemBabe iOS-18 Overlay v9 FIXED
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
 #define FEMBABE_TAG 0xFE0BABE
 
-#pragma mark - Globals
-
 static UIWindow *g_overlayWin = nil;
 static UIWindow *g_presentWin = nil;
-
-#pragma mark - Smooth draggable button
 
 @interface FBButton : UIButton
 @property (nonatomic) CGPoint centerStart;
@@ -29,7 +23,6 @@ static UIWindow *g_presentWin = nil;
     
     Class loginVCClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
     if (!loginVCClass) return;
-    
     UIViewController *loginVC = [[loginVCClass alloc] init];
     if (!loginVC) return;
     
@@ -41,9 +34,7 @@ static UIWindow *g_presentWin = nil;
 - (void)handlePan:(UIPanGestureRecognizer *)g {
     UIWindow *win = g_overlayWin;
     if (!win) return;
-    
     CGPoint translation = [g translationInView:nil];
-    
     if (g.state == UIGestureRecognizerStateBegan) {
         _centerStart = win.center;
     } else if (g.state == UIGestureRecognizerStateChanged) {
@@ -56,8 +47,6 @@ static UIWindow *g_presentWin = nil;
 }
 @end
 
-#pragma mark - Passthrough window
-
 @interface FBPresentWindow : UIWindow
 @end
 
@@ -68,19 +57,18 @@ static UIWindow *g_presentWin = nil;
 }
 @end
 
-#pragma mark - Hook login VC to show actual login form
-
-static void (*orig_viewWillAppear)(id self, SEL _cmd, BOOL animated);
+// FIXED: Proper function pointer type
+static IMP orig_viewWillAppear = NULL;
 static void hook_viewWillAppear(id self, SEL _cmd, BOOL animated) {
-    if (orig_viewWillAppear) orig_viewWillAppear(self, _cmd, animated);
+    if (orig_viewWillAppear) {
+        ((void(*)(id, SEL, BOOL))orig_viewWillAppear)(self, _cmd, animated);
+    }
     if ([self respondsToSelector:@selector(authLoginTapped)]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             [self performSelector:@selector(authLoginTapped)];
         });
     }
 }
-
-#pragma mark - Block B button
 
 static IMP orig_setTitle = NULL;
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
@@ -144,7 +132,7 @@ __attribute__((constructor)) static void init(void) {
         Class loginClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
         if (loginClass) {
             Method vwa = class_getInstanceMethod(loginClass, @selector(viewWillAppear:));
-            if (vwa) orig_viewWillAppear = (void *)method_setImplementation(vwa, (IMP)hook_viewWillAppear);
+            if (vwa) orig_viewWillAppear = method_setImplementation(vwa, (IMP)hook_viewWillAppear);
         }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{ buildOverlay(); });
     }
