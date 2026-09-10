@@ -5,8 +5,9 @@
 
 static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
+static IMP orig_addSubview = NULL;
 
-// Hook function - hide B button
+// Hook setTitle - hide B button
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (title && [title isEqualToString:@"B"]) {
         self.hidden = YES;
@@ -14,6 +15,19 @@ static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlSt
     }
     if (orig_setTitle) {
         ((void(*)(id,SEL,id,UIControlState))orig_setTitle)(self, _cmd, title, state);
+    }
+}
+
+// Hook addSubview - hide orange button class
+static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
+    // Check if it's the orange float button class
+    Class orangeClass = NSClassFromString(@"iHsfaTkdhwkzopQfsnwBd");
+    if (orangeClass && [view isKindOfClass:orangeClass]) {
+        view.hidden = YES;
+        return; // Don't add it
+    }
+    if (orig_addSubview) {
+        ((void(*)(id,SEL,id))orig_addSubview)(self, _cmd, view);
     }
 }
 
@@ -79,13 +93,14 @@ static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlSt
 @end
 
 %ctor {
-    // HOOK FIRST - before anything else
-    Method m = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
-    if (m) {
-        orig_setTitle = method_setImplementation(m, (IMP)hook_setTitle);
-    }
+    // Hook setTitle on UIButton
+    Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
+    if (m1) orig_setTitle = method_setImplementation(m1, (IMP)hook_setTitle);
     
-    // Then setup UI
+    // Hook addSubview on UIView
+    Method m2 = class_getInstanceMethod([UIView class], @selector(addSubview:));
+    if (m2) orig_addSubview = method_setImplementation(m2, (IMP)hook_addSubview);
+    
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         @autoreleasepool {
             UIWindowScene *scene = nil;
