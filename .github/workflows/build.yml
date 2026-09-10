@@ -14,9 +14,8 @@ jobs:
       - name: Setup Theos
         run: |
           brew install ldid xz dpkg
-          git clone --depth=1 https://github.com/theos/theos.git $HOME/theos
-          curl -sLo sdk.tar.xz "https://github.com/theos/sdks/releases/download/iPhoneOS17.5-15.4/iPhoneOS17.5.sdk.tar.xz"
-          tar -xJf sdk.tar.xz -C $HOME/theos/sdks || { curl -sLo sdk.tar.xz "https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz" && tar -xJf sdk.tar.xz -C $HOME/theos/sdks; }
+          git clone --recursive --depth=1 https://github.com/theos/theos.git $HOME/theos
+          $HOME/theos/bin/update-theos
           echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           
       - name: Build Tweak
