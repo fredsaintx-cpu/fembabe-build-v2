@@ -1,6 +1,7 @@
 // FemBabe iOS-18 Overlay v24 - Trigger camera's own login
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 
 #define FEMBABE_TAG 0xFE0BABE
 
@@ -13,60 +14,33 @@ static UIWindow *g_presentWin = nil;
 @implementation FBButton
 
 - (void)triggerCameraLogin:(NSString *)key {
-    // Get the main vcam manager
     Class vcamClass = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
     id shared = nil;
-    if (vcamClass && [vcamClass respondsToSelector:@selector(sharedInstance)]) {
-        shared = [vcamClass performSelector:@selector(sharedInstance)];
+    if (vcamClass) {
+        shared = ((id(*)(id,SEL))objc_msgSend)(vcamClass, @selector(sharedInstance));
     }
     
-    // Try various login methods on the manager
     if (shared) {
-        // Try direct login methods
-        SEL selectors[] = {
-            @selector(loginWithKey:),
-            @selector(activateWithKey:),
-            @selector(login:),
-            @selector(activate:),
-            @selector(setActivationKey:),
-            @selector(setKey:),
-            @selector(doLogin:),
-            @selector(performLogin:)
-        };
-        for (int i = 0; i < sizeof(selectors)/sizeof(selectors[0]); i++) {
-            if ([shared respondsToSelector:selectors[i]]) {
-                [shared performSelector:selectors[i] withObject:key];
-                break;
-            }
-        }
-        
-        // Also try setting key via KVC then calling login
         @try { [shared setValue:key forKey:@"activationKey"]; } @catch(NSException *e) {}
         @try { [shared setValue:key forKey:@"key"]; } @catch(NSException *e) {}
         @try { [shared setValue:key forKey:@"licenseKey"]; } @catch(NSException *e) {}
         
-        if ([shared respondsToSelector:@selector(login)]) {
-            [shared performSelector:@selector(login)];
+        if ([shared respondsToSelector:@selector(loginWithKey:)]) {
+            ((void(*)(id,SEL,id))objc_msgSend)(shared, @selector(loginWithKey:), key);
         }
-        if ([shared respondsToSelector:@selector(doLogin)]) {
-            [shared performSelector:@selector(doLogin)];
+        if ([shared respondsToSelector:@selector(login)]) {
+            ((void(*)(id,SEL))objc_msgSend)(shared, @selector(login));
         }
     }
     
-    // Try the settings VC class
     Class settingsClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
     if (settingsClass) {
         id vc = [[settingsClass alloc] init];
-        
-        // Set key via KVC
         @try { [vc setValue:key forKey:@"activationKey"]; } @catch(NSException *e) {}
         @try { [vc setValue:key forKey:@"key"]; } @catch(NSException *e) {}
-        @try { [vc setValue:key forKey:@"keyField"]; } @catch(NSException *e) {}
         
-        // Load view to access text fields
         if ([vc isKindOfClass:[UIViewController class]]) {
             [(UIViewController *)vc loadViewIfNeeded];
-            // Find text fields and set key
             for (UIView *v in [(UIViewController *)vc view].subviews) {
                 if ([v isKindOfClass:[UITextField class]]) {
                     [(UITextField *)v setText:key];
@@ -74,20 +48,12 @@ static UIWindow *g_presentWin = nil;
             }
         }
         
-        // Call activation methods
         if ([vc respondsToSelector:@selector(authActivateTapped)]) {
-            [vc performSelector:@selector(authActivateTapped)];
-        }
-        if ([vc respondsToSelector:@selector(activateTapped)]) {
-            [vc performSelector:@selector(activateTapped)];
-        }
-        if ([vc respondsToSelector:@selector(login)]) {
-            [vc performSelector:@selector(login)];
+            ((void(*)(id,SEL))objc_msgSend)(vc, @selector(authActivateTapped));
         }
     }
     
-    // Show feedback
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Activating..." message:@"Check if camera panel appears" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:@"Sent" message:@"Check if panel appears" preferredStyle:UIAlertControllerStyleAlert];
     [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
     [g_presentWin.rootViewController presentViewController:a animated:YES completion:nil];
 }
@@ -109,7 +75,7 @@ static UIWindow *g_presentWin = nil;
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     __weak typeof(self) ws = self;
-    [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *act) {
         [ws triggerCameraLogin:alert.textFields.firstObject.text];
     }]];
     [g_presentWin.rootViewController presentViewController:alert animated:YES completion:nil];
