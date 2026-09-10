@@ -8,6 +8,10 @@ static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
 static NSString *g_pendingKey = nil;
+static BOOL g_isAuthed = NO;
+static id g_settingsVC = nil;
+
+static void showActivationAlert(void);
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
@@ -21,26 +25,33 @@ static void hook_addSubview(UIView *self, SEL _cmd, UIView *view) {
 }
 
 static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *vc, BOOL animated, void (^completion)(void)) {
-    if ([vc isKindOfClass:[UIAlertController class]] && g_pendingKey) {
+    if ([vc isKindOfClass:[UIAlertController class]]) {
         UIAlertController *alert = (UIAlertController *)vc;
         NSString *title = alert.title;
         
+        // Block ALL native Login popups - redirect to our activation
         if (title && [title containsString:@"Login"]) {
-            if (alert.textFields.count > 0) {
-                alert.textFields[0].text = g_pendingKey;
-            }
-            
-            // Call handler directly WITHOUT presenting
-            for (UIAlertAction *action in alert.actions) {
-                if (action.style == UIAlertActionStyleDefault) {
-                    void (^handler)(UIAlertAction *) = [action valueForKey:@"handler"];
-                    if (handler) handler(action);
-                    break;
+            if (g_pendingKey) {
+                // We have a pending key - fill and trigger
+                if (alert.textFields.count > 0) {
+                    alert.textFields[0].text = g_pendingKey;
                 }
+                for (UIAlertAction *action in alert.actions) {
+                    if (action.style == UIAlertActionStyleDefault) {
+                        void (^handler)(UIAlertAction *) = [action valueForKey:@"handler"];
+                        if (handler) handler(action);
+                        break;
+                    }
+                }
+                g_pendingKey = nil;
+            } else {
+                // No pending key (logout/error case) - show our activation instead
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    showActivationAlert();
+                });
             }
-            g_pendingKey = nil;
             if (completion) completion();
-            return;
+            return; // Don't present native login
         }
     }
     
@@ -65,6 +76,34 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
 - (void)handleTap {
     AudioServicesPlaySystemSound(1519);
     
+    // If already authed, toggle the settings panel
+    if (g_isAuthed && g_settingsVC) {
+        UIViewController *presented = overlayWindow.rootViewController.presentedViewController;
+        if (presented) {
+            // Panel is showing - hide it
+            [presented dismissViewControllerAnimated:YES completion:nil];
+        } else {
+            // Panel is hidden - show it
+            [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:nil];
+        }
+        return;
+    }
+    
+    // Not authed - show activation alert
+    showActivationAlert();
+}
+
+- (void)handlePan:(UIPanGestureRecognizer *)g {
+    if (g.state == UIGestureRecognizerStateBegan) {
+        self.dragStart = [g locationInView:overlayWindow];
+        self.winStart = self.center;
+    }
+    CGPoint p = [g locationInView:overlayWindow];
+    self.center = CGPointMake(self.winStart.x + p.x - self.dragStart.x, self.winStart.y + p.y - self.dragStart.y);
+}
+@end
+
+static void showActivationAlert(void) {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"FemBabe"
                                                                    message:@"Enter activation key"
                                                             preferredStyle:UIAlertControllerStyleAlert];
@@ -79,16 +118,21 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
         if (key.length == 0) return;
         
         g_pendingKey = [key copy];
+        g_isAuthed = NO;
         
         Class vcClass = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-        id vc = [[vcClass alloc] init];
-        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setServer:), @"https://v.fembabe.org");
-        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setUsername:), key);
-        ((void(*)(id,SEL,id))objc_msgSend)(vc, @selector(setPassword:), key);
+        g_settingsVC = [[vcClass alloc] init];
+        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setServer:), @"https://v.fembabe.org");
+        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setUsername:), key);
+        ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(setPassword:), key);
         
-        [overlayWindow.rootViewController presentViewController:vc animated:YES completion:^{
+        [overlayWindow.rootViewController presentViewController:g_settingsVC animated:YES completion:^{
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 200*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
-                ((void(*)(id,SEL))objc_msgSend)(vc, @selector(login));
+                ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(login));
+                // Mark as authed after login attempt
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 500*NSEC_PER_MSEC), dispatch_get_main_queue(), ^{
+                    g_isAuthed = YES;
+                });
             });
         }];
     }]];
@@ -96,16 +140,6 @@ static void hook_presentVC(UIViewController *self, SEL _cmd, UIViewController *v
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [overlayWindow.rootViewController presentViewController:alert animated:YES completion:nil];
 }
-
-- (void)handlePan:(UIPanGestureRecognizer *)g {
-    if (g.state == UIGestureRecognizerStateBegan) {
-        self.dragStart = [g locationInView:overlayWindow];
-        self.winStart = self.center;
-    }
-    CGPoint p = [g locationInView:overlayWindow];
-    self.center = CGPointMake(self.winStart.x + p.x - self.dragStart.x, self.winStart.y + p.y - self.dragStart.y);
-}
-@end
 
 %ctor {
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
