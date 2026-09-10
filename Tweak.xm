@@ -1,28 +1,42 @@
 #import <Foundation/Foundation.h>
-#import <Network/Network.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
 
-// Trigger iOS 18 Local Network permission prompt using NWBrowser
-static void triggerLocalNetworkPrompt(void) {
-    // Use Bonjour browser to trigger local network prompt
-    nw_browse_descriptor_t descriptor = nw_browse_descriptor_create_bonjour_service("_http._tcp", "local.");
-    nw_parameters_t params = nw_parameters_create();
-    nw_browser_t browser = nw_browser_create(descriptor, params);
-    
-    nw_browser_set_queue(browser, dispatch_get_main_queue());
-    nw_browser_set_browse_results_changed_handler(browser, ^(nw_browse_result_t result, nw_browse_result_t old_result, bool added) {
-        // Just need to trigger the prompt, don't care about results
-    });
-    
-    nw_browser_start(browser);
-    
-    // Cancel after 3 seconds
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        nw_browser_cancel(browser);
+// Use raw POSIX sockets to bypass iOS 18 Network.framework sandbox
+static void triggerLocalNetworkRaw(void) {
+    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        // Create UDP socket
+        int sock = socket(AF_INET, SOCK_DGRAM, 0);
+        if (sock < 0) return;
+        
+        // Enable broadcast
+        int broadcast = 1;
+        setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, sizeof(broadcast));
+        
+        // Send to multicast/broadcast to trigger local network
+        struct sockaddr_in addr;
+        memset(&addr, 0, sizeof(addr));
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(9999);
+        addr.sin_addr.s_addr = inet_addr("224.0.0.1");
+        
+        const char *msg = "ping";
+        sendto(sock, msg, strlen(msg), 0, (struct sockaddr *)&addr, sizeof(addr));
+        
+        close(sock);
     });
 }
 
 %ctor {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-        triggerLocalNetworkPrompt();
+    // Trigger early to establish local network before vcam needs it
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        triggerLocalNetworkRaw();
+    });
+    
+    // Also trigger periodically
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5*NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        triggerLocalNetworkRaw();
     });
 }
