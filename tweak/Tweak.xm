@@ -3,15 +3,23 @@
 #import <objc/message.h>
 #import <AudioToolbox/AudioToolbox.h>
 
-// Simple overlay - no iOS 18 specific code, let daemon handle network
 static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
+static IMP orig_isConnected = NULL;
 static BOOL g_isAuthed = NO;
+static BOOL g_forceConnected = NO;
 static id g_settingsVC = nil;
 
 static void showActivationAlert(void);
+
+// iOS 18 fix - hook isConnected to return YES after auth
+static BOOL hook_isConnected(id self, SEL _cmd) {
+    if (g_forceConnected) return YES;
+    if (orig_isConnected) return ((BOOL(*)(id,SEL))orig_isConnected)(self, _cmd);
+    return NO;
+}
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
     if (title && [title isEqualToString:@"B"]) { self.hidden = YES; return; }
@@ -98,6 +106,7 @@ static void doLogin(NSString *key) {
                     if ([json[@"ok"] boolValue]) {
                         ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
                         g_isAuthed = YES;
+                        g_forceConnected = YES; // Force connected on iOS 18
                     } else {
                         ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), json[@"error"] ?: @"Invalid key");
                     }
@@ -117,13 +126,20 @@ static void showActivationAlert(void) {
     }];
     [alert addAction:[UIAlertAction actionWithTitle:@"Activate" style:UIAlertActionStyleDefault handler:^(UIAlertAction *a) {
         NSString *key = alert.textFields.firstObject.text;
-        if (key.length > 0) { g_isAuthed = NO; doLogin(key); }
+        if (key.length > 0) { g_isAuthed = NO; g_forceConnected = NO; doLogin(key); }
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [overlayWindow.rootViewController presentViewController:alert animated:YES completion:nil];
 }
 
 %ctor {
+    // Hook isConnected on vcam manager for iOS 18
+    Class vcamMgr = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
+    if (vcamMgr) {
+        Method m = class_getInstanceMethod(vcamMgr, @selector(isConnected));
+        if (m) orig_isConnected = method_setImplementation(m, (IMP)hook_isConnected);
+    }
+    
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
     if (m1) orig_setTitle = method_setImplementation(m1, (IMP)hook_setTitle);
     Method m2 = class_getInstanceMethod([UIView class], @selector(addSubview:));
