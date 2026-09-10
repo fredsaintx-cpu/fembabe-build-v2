@@ -13,20 +13,23 @@ jobs:
 
       - name: Setup Theos
         run: |
-          brew install ldid make
+          brew install ldid make dpkg
           git clone --depth=1 https://github.com/theos/theos.git $HOME/theos
-          echo "THEOS=$HOME/theos" >> $GITHUB_ENV
           curl -sL https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz | tar -xJf - -C $HOME/theos/sdks/
 
       - name: Build Tweak
+        env:
+          THEOS: /Users/runner/theos
         run: |
           cd tweak
-          make package FINALPACKAGE=1
+          make FINALPACKAGE=1
 
       - name: Build Daemon
+        env:
+          THEOS: /Users/runner/theos
         run: |
           cd daemon
-          make package FINALPACKAGE=1
+          make FINALPACKAGE=1
 
       - name: Package DEB
         run: |
