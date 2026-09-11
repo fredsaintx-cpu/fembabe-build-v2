@@ -2,6 +2,8 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <CoreMedia/CoreMedia.h>
+#import <CoreVideo/CoreVideo.h>
 #import <sys/mman.h>
 #import <fcntl.h>
 
