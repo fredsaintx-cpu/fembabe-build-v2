@@ -6,89 +6,96 @@
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <pthread.h>
-#include <fcntl.h>
 
-#define UNIX_SOCK_PATH "/var/mobile/Library/Caches/vcam.sock"
+#define SOCK_PATH "/var/mobile/Library/Caches/vcam.sock"
 
-static int client_fd = -1;
-static volatile int has_client = 0;
-
-void *forward_thread(void *arg) {
+void *copy_data(void *arg) {
     int *fds = (int*)arg;
-    int from = fds[0], to = fds[1];
-    free(fds);
     char buf[65536];
-    while (1) {
-        ssize_t n = read(from, buf, sizeof(buf));
-        if (n <= 0) break;
-        write(to, buf, n);
-    }
+    ssize_t n;
+    while ((n = read(fds[0], buf, sizeof(buf))) > 0)
+        write(fds[1], buf, n);
+    close(fds[0]);
+    close(fds[1]);
+    free(fds);
     return NULL;
 }
 
-void *handle_unix_client(void *arg) {
-    int ufd = *(int*)arg;
+void *handle_obs(void *arg) {
+    int obs_fd = *(int*)arg;
     free(arg);
-    while (!has_client) usleep(10000);
-    int *fds1 = malloc(8); fds1[0] = ufd; fds1[1] = client_fd;
-    int *fds2 = malloc(8); fds2[0] = client_fd; fds2[1] = ufd;
+    
+    // Connect to Unix socket (where RTMPServer will connect)
+    int usock = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un uaddr = {0};
+    uaddr.sun_len = sizeof(uaddr);
+    uaddr.sun_family = AF_UNIX;
+    strcpy(uaddr.sun_path, SOCK_PATH);
+    
+    // Wait for RTMPServer to connect to Unix socket
+    // Actually we need RTMPServer to be the server on unix socket
+    // Let's flip it - we create unix server, RTMPServer connects
+    
+    // For now just forward to existing unix client
+    if (connect(usock, (struct sockaddr*)&uaddr, sizeof(uaddr)) < 0) {
+        close(obs_fd);
+        close(usock);
+        return NULL;
+    }
+    
+    int *fds1 = malloc(8); fds1[0] = obs_fd; fds1[1] = usock;
+    int *fds2 = malloc(8); fds2[0] = usock; fds2[1] = obs_fd;
+    
     pthread_t t1, t2;
-    pthread_create(&t1, NULL, forward_thread, fds1);
-    pthread_create(&t2, NULL, forward_thread, fds2);
+    pthread_create(&t1, NULL, copy_data, fds1);
+    pthread_create(&t2, NULL, copy_data, fds2);
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
-    has_client = 0;
-    client_fd = -1;
-    close(ufd);
-    return NULL;
-}
-
-void *unix_server(void *arg) {
-    unlink(UNIX_SOCK_PATH);
-    int userver = socket(AF_UNIX, SOCK_STREAM, 0);
-    struct sockaddr_un uaddr;
-    memset(&uaddr, 0, sizeof(uaddr));
-    uaddr.sun_family = AF_UNIX;
-    strcpy(uaddr.sun_path, UNIX_SOCK_PATH);
-    bind(userver, (struct sockaddr*)&uaddr, sizeof(uaddr));
-    chmod(UNIX_SOCK_PATH, 0777);
-    listen(userver, 5);
-    while (1) {
-        int *ufd = malloc(sizeof(int));
-        *ufd = accept(userver, NULL, NULL);
-        if (*ufd < 0) { free(ufd); continue; }
-        pthread_t t;
-        pthread_create(&t, NULL, handle_unix_client, ufd);
-        pthread_detach(t);
-    }
     return NULL;
 }
 
 int main() {
-    pthread_t ut;
-    pthread_create(&ut, NULL, unix_server, NULL);
+    // Create Unix socket server for SpringBoard to connect to
+    unlink(SOCK_PATH);
+    int usrv = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un uaddr = {0};
+    uaddr.sun_len = sizeof(uaddr);
+    uaddr.sun_family = AF_UNIX;
+    strcpy(uaddr.sun_path, SOCK_PATH);
+    bind(usrv, (struct sockaddr*)&uaddr, sizeof(uaddr));
+    chmod(SOCK_PATH, 0777);
+    listen(usrv, 1);
     
-    int server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    // TCP server for OBS
+    int tsrv = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(tsrv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     
-    struct sockaddr_in addr;
-    memset(&addr, 0, sizeof(addr));
-    *((uint8_t*)&addr) = sizeof(struct sockaddr_in);
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(1935);
-    addr.sin_addr.s_addr = INADDR_ANY;
-    
-    if (bind(server_fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) return 1;
-    if (listen(server_fd, 5) < 0) return 1;
+    struct sockaddr_in taddr = {0};
+    taddr.sin_len = sizeof(taddr);
+    taddr.sin_family = AF_INET;
+    taddr.sin_port = htons(1935);
+    bind(tsrv, (struct sockaddr*)&taddr, sizeof(taddr));
+    listen(tsrv, 5);
     
     while (1) {
-        int cfd = accept(server_fd, NULL, NULL);
-        if (cfd < 0) continue;
-        client_fd = cfd;
-        has_client = 1;
-        while (has_client) usleep(100000);
-        close(cfd);
+        // Wait for SpringBoard to connect to Unix socket
+        int uclient = accept(usrv, NULL, NULL);
+        if (uclient < 0) continue;
+        
+        // Wait for OBS to connect to TCP
+        int tclient = accept(tsrv, NULL, NULL);
+        if (tclient < 0) { close(uclient); continue; }
+        
+        // Forward bidirectionally
+        int *fds1 = malloc(8); fds1[0] = tclient; fds1[1] = uclient;
+        int *fds2 = malloc(8); fds2[0] = uclient; fds2[1] = tclient;
+        
+        pthread_t t1, t2;
+        pthread_create(&t1, NULL, copy_data, fds1);
+        pthread_create(&t2, NULL, copy_data, fds2);
+        pthread_detach(t1);
+        pthread_detach(t2);
     }
     return 0;
 }
