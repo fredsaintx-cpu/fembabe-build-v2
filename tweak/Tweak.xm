@@ -8,12 +8,42 @@ static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
 static IMP orig_setRtmp = NULL;
+static IMP orig_isRunning = NULL;
+static IMP orig_isConnected = NULL;
+static IMP orig_status = NULL;
 static BOOL g_isAuthed = NO;
 static id g_settingsVC = nil;
 
 static void showActivationAlert(void);
 
-// Hook setRtmp: to redirect to localhost proxy
+// v73: Hook RTMPServer isRunning -> return YES after auth
+static BOOL hook_isRunning(id self, SEL _cmd) {
+    if (g_isAuthed) {
+        return YES;
+    }
+    if (orig_isRunning) return ((BOOL(*)(id,SEL))orig_isRunning)(self, _cmd);
+    return NO;
+}
+
+// v73: Hook vcamMgr isConnected -> return YES after auth
+static BOOL hook_isConnected(id self, SEL _cmd) {
+    if (g_isAuthed) {
+        return YES;
+    }
+    if (orig_isConnected) return ((BOOL(*)(id,SEL))orig_isConnected)(self, _cmd);
+    return NO;
+}
+
+// v73: Hook SettingsVC status: to replace Connecting with Connected
+static void hook_status(id self, SEL _cmd, NSString *status) {
+    if (g_isAuthed && status && [status containsString:@"Connecting"]) {
+        status = [status stringByReplacingOccurrencesOfString:@"Connecting..." withString:@"Connected"];
+        status = [status stringByReplacingOccurrencesOfString:@"Connecting" withString:@"Connected"];
+        NSLog(@"[FemBabe v73] Forced status: %@", status);
+    }
+    if (orig_status) ((void(*)(id,SEL,id))orig_status)(self, _cmd, status);
+}
+
 static void hook_setRtmp(id self, SEL _cmd, NSString *rtmpUrl) {
     NSLog(@"[FemBabe] Original RTMP: %@", rtmpUrl);
     if (rtmpUrl && [rtmpUrl containsString:@"rtmp://"]) {
@@ -114,7 +144,7 @@ static void doLogin(NSString *key) {
                 if (data && !e) {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if ([json[@"ok"] boolValue]) {
-                        NSLog(@"[FemBabe v71] Login success!");
+                        NSLog(@"[FemBabe v73] Login success!");
                         
                         NSDictionary *encConfig = json[@"encConfig"];
                         if (encConfig[@"ct"]) {
@@ -123,7 +153,7 @@ static void doLogin(NSString *key) {
                                 NSDictionary *config = [NSJSONSerialization JSONObjectWithData:ctData options:0 error:nil];
                                 NSString *sid = config[@"sid"];
                                 if (sid) {
-                                    NSLog(@"[FemBabe v71] Got SID: %@", sid);
+                                    NSLog(@"[FemBabe v73] Got SID: %@", sid);
                                     ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setToken:), sid);
                                 }
                             }
@@ -134,7 +164,9 @@ static void doLogin(NSString *key) {
                             ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setToken:), licenseSig);
                         }
                         
+                        // Set auth flag BEFORE calling loggedin
                         g_isAuthed = YES;
+                        
                         ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
                     } else {
                         ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), json[@"error"] ?: @"Invalid key");
@@ -162,10 +194,37 @@ static void showActivationAlert(void) {
 }
 
 %ctor {
+    // v73: Hook RTMPServer isRunning
+    Class rtmpClass = NSClassFromString(@"RTMPServer");
+    if (rtmpClass) {
+        Method m = class_getInstanceMethod(rtmpClass, @selector(isRunning));
+        if (m) {
+            orig_isRunning = method_setImplementation(m, (IMP)hook_isRunning);
+            NSLog(@"[FemBabe v73] Hooked RTMPServer isRunning");
+        }
+    }
+    
+    // v73: Hook vcamMgr isConnected
     Class vcamMgr = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
     if (vcamMgr) {
         Method m = class_getInstanceMethod(vcamMgr, @selector(setRtmp:));
         if (m) orig_setRtmp = method_setImplementation(m, (IMP)hook_setRtmp);
+        
+        Method connMethod = class_getInstanceMethod(vcamMgr, @selector(isConnected));
+        if (connMethod) {
+            orig_isConnected = method_setImplementation(connMethod, (IMP)hook_isConnected);
+            NSLog(@"[FemBabe v73] Hooked vcamMgr isConnected");
+        }
+    }
+    
+    // v73: Hook SettingsVC status:
+    Class settingsVC = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
+    if (settingsVC) {
+        Method m = class_getInstanceMethod(settingsVC, @selector(status:));
+        if (m) {
+            orig_status = method_setImplementation(m, (IMP)hook_status);
+            NSLog(@"[FemBabe v73] Hooked SettingsVC status:");
+        }
     }
     
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
