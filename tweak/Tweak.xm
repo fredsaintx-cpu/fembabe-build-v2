@@ -2,63 +2,92 @@
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <sys/mman.h>
+#import <fcntl.h>
 
 static UIWindow *overlayWindow = nil;
 static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
-static IMP orig_setRtmp = NULL;
+static IMP orig_getLiveFrame = NULL;
 static IMP orig_isRunning = NULL;
-static IMP orig_isConnected = NULL;
-static IMP orig_status = NULL;
 static BOOL g_isAuthed = NO;
 static id g_settingsVC = nil;
 
+// Ring buffer for RTMP frames from daemon
+#define RING_PATH "/tmp/vcam_rtmp_ring.bin"
+#define RING_SIZE (16 * 1024 * 1024)  // 16MB
+static void *g_ringBase = NULL;
+static int g_ringFd = -1;
+
+typedef struct {
+    uint32_t magic;         // 0x56434D52 = "VCMR"
+    uint32_t writePos;      // Current write position
+    uint32_t frameSize;     // Size of current frame
+    uint32_t width;
+    uint32_t height;
+    uint32_t ready;         // Frame ready flag
+} RingHeader;
+
 static void showActivationAlert(void);
 
-// v73: Hook RTMPServer isRunning -> return YES after auth
-static BOOL hook_isRunning(id self, SEL _cmd) {
-    if (g_isAuthed) {
-        return YES;
+// v74: Map the ring buffer from daemon
+static void mapRingBuffer(void) {
+    if (g_ringBase) return;
+    
+    g_ringFd = open(RING_PATH, O_RDONLY);
+    if (g_ringFd < 0) {
+        NSLog(@"[FemBabe v74] Ring buffer not found - daemon not running?");
+        return;
     }
+    
+    g_ringBase = mmap(NULL, RING_SIZE, PROT_READ, MAP_SHARED, g_ringFd, 0);
+    if (g_ringBase == MAP_FAILED) {
+        NSLog(@"[FemBabe v74] mmap failed");
+        g_ringBase = NULL;
+        close(g_ringFd);
+        g_ringFd = -1;
+        return;
+    }
+    NSLog(@"[FemBabe v74] Ring buffer mapped at %p", g_ringBase);
+}
+
+// v74: Hook getLiveFrame: to read from ring buffer instead of RTMPServer
+static CMSampleBufferRef hook_getLiveFrame(id self, SEL _cmd, CMSampleBufferRef inputBuffer) {
+    if (!g_isAuthed || !g_ringBase) {
+        if (orig_getLiveFrame) {
+            return ((CMSampleBufferRef(*)(id,SEL,CMSampleBufferRef))orig_getLiveFrame)(self, _cmd, inputBuffer);
+        }
+        return inputBuffer;
+    }
+    
+    RingHeader *header = (RingHeader *)g_ringBase;
+    if (header->magic != 0x56434D52 || !header->ready) {
+        // No frame ready, return original
+        if (orig_getLiveFrame) {
+            return ((CMSampleBufferRef(*)(id,SEL,CMSampleBufferRef))orig_getLiveFrame)(self, _cmd, inputBuffer);
+        }
+        return inputBuffer;
+    }
+    
+    // Frame is ready in ring buffer - create CMSampleBuffer from it
+    // For now, just log and pass through - full implementation would create buffer
+    static int logCount = 0;
+    if (logCount++ % 60 == 0) {
+        NSLog(@"[FemBabe v74] Frame ready: %dx%d size=%d", header->width, header->height, header->frameSize);
+    }
+    
+    if (orig_getLiveFrame) {
+        return ((CMSampleBufferRef(*)(id,SEL,CMSampleBufferRef))orig_getLiveFrame)(self, _cmd, inputBuffer);
+    }
+    return inputBuffer;
+}
+
+// v74: Force isRunning to return YES
+static BOOL hook_isRunning(id self, SEL _cmd) {
+    if (g_isAuthed) return YES;
     if (orig_isRunning) return ((BOOL(*)(id,SEL))orig_isRunning)(self, _cmd);
     return NO;
-}
-
-// v73: Hook vcamMgr isConnected -> return YES after auth
-static BOOL hook_isConnected(id self, SEL _cmd) {
-    if (g_isAuthed) {
-        return YES;
-    }
-    if (orig_isConnected) return ((BOOL(*)(id,SEL))orig_isConnected)(self, _cmd);
-    return NO;
-}
-
-// v73: Hook SettingsVC status: to replace Connecting with Connected
-static void hook_status(id self, SEL _cmd, NSString *status) {
-    if (g_isAuthed && status && [status containsString:@"Connecting"]) {
-        status = [status stringByReplacingOccurrencesOfString:@"Connecting..." withString:@"Connected"];
-        status = [status stringByReplacingOccurrencesOfString:@"Connecting" withString:@"Connected"];
-        NSLog(@"[FemBabe v73] Forced status: %@", status);
-    }
-    if (orig_status) ((void(*)(id,SEL,id))orig_status)(self, _cmd, status);
-}
-
-static void hook_setRtmp(id self, SEL _cmd, NSString *rtmpUrl) {
-    NSLog(@"[FemBabe] Original RTMP: %@", rtmpUrl);
-    if (rtmpUrl && [rtmpUrl containsString:@"rtmp://"]) {
-        NSRange hostStart = [rtmpUrl rangeOfString:@"rtmp://"];
-        if (hostStart.location != NSNotFound) {
-            NSString *afterScheme = [rtmpUrl substringFromIndex:hostStart.location + hostStart.length];
-            NSRange pathStart = [afterScheme rangeOfString:@"/"];
-            if (pathStart.location != NSNotFound) {
-                NSString *path = [afterScheme substringFromIndex:pathStart.location];
-                rtmpUrl = [NSString stringWithFormat:@"rtmp://127.0.0.1:1935%@", path];
-                NSLog(@"[FemBabe] Redirected to: %@", rtmpUrl);
-            }
-        }
-    }
-    if (orig_setRtmp) ((void(*)(id,SEL,id))orig_setRtmp)(self, _cmd, rtmpUrl);
 }
 
 static void hook_setTitle(UIButton *self, SEL _cmd, NSString *title, UIControlState state) {
@@ -144,7 +173,7 @@ static void doLogin(NSString *key) {
                 if (data && !e) {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if ([json[@"ok"] boolValue]) {
-                        NSLog(@"[FemBabe v73] Login success!");
+                        NSLog(@"[FemBabe v74] Login success!");
                         
                         NSDictionary *encConfig = json[@"encConfig"];
                         if (encConfig[@"ct"]) {
@@ -153,7 +182,6 @@ static void doLogin(NSString *key) {
                                 NSDictionary *config = [NSJSONSerialization JSONObjectWithData:ctData options:0 error:nil];
                                 NSString *sid = config[@"sid"];
                                 if (sid) {
-                                    NSLog(@"[FemBabe v73] Got SID: %@", sid);
                                     ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setToken:), sid);
                                 }
                             }
@@ -164,8 +192,10 @@ static void doLogin(NSString *key) {
                             ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setToken:), licenseSig);
                         }
                         
-                        // Set auth flag BEFORE calling loggedin
                         g_isAuthed = YES;
+                        
+                        // v74: Map ring buffer after auth
+                        mapRingBuffer();
                         
                         ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
                     } else {
@@ -194,36 +224,20 @@ static void showActivationAlert(void) {
 }
 
 %ctor {
-    // v73: Hook RTMPServer isRunning
+    // v74: Hook RTMPServer isRunning
     Class rtmpClass = NSClassFromString(@"RTMPServer");
     if (rtmpClass) {
         Method m = class_getInstanceMethod(rtmpClass, @selector(isRunning));
-        if (m) {
-            orig_isRunning = method_setImplementation(m, (IMP)hook_isRunning);
-            NSLog(@"[FemBabe v73] Hooked RTMPServer isRunning");
-        }
+        if (m) orig_isRunning = method_setImplementation(m, (IMP)hook_isRunning);
     }
     
-    // v73: Hook vcamMgr isConnected
+    // v74: Hook vcamMgr getLiveFrame:
     Class vcamMgr = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
     if (vcamMgr) {
-        Method m = class_getInstanceMethod(vcamMgr, @selector(setRtmp:));
-        if (m) orig_setRtmp = method_setImplementation(m, (IMP)hook_setRtmp);
-        
-        Method connMethod = class_getInstanceMethod(vcamMgr, @selector(isConnected));
-        if (connMethod) {
-            orig_isConnected = method_setImplementation(connMethod, (IMP)hook_isConnected);
-            NSLog(@"[FemBabe v73] Hooked vcamMgr isConnected");
-        }
-    }
-    
-    // v73: Hook SettingsVC status:
-    Class settingsVC = NSClassFromString(@"iMswGsfawYfewewUfdsmn");
-    if (settingsVC) {
-        Method m = class_getInstanceMethod(settingsVC, @selector(status:));
+        Method m = class_getInstanceMethod(vcamMgr, @selector(getLiveFrame:));
         if (m) {
-            orig_status = method_setImplementation(m, (IMP)hook_status);
-            NSLog(@"[FemBabe v73] Hooked SettingsVC status:");
+            orig_getLiveFrame = method_setImplementation(m, (IMP)hook_getLiveFrame);
+            NSLog(@"[FemBabe v74] Hooked getLiveFrame:");
         }
     }
     
