@@ -8,36 +8,39 @@ on:
 jobs:
   build:
     runs-on: macos-latest
-    env:
-      THEOS: /Users/runner/theos
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Theos
-        run: |
-          brew install ldid make dpkg
-          git clone --depth=1 https://github.com/theos/theos.git $THEOS
-          curl -sL https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz | tar -xJf - -C $THEOS/sdks/
-
       - name: Build libroothide stub
         run: |
-          make FINALPACKAGE=1
-          ls -la .theos/obj/
+          # Direct clang compile for iOS
+          xcrun -sdk iphoneos clang -arch arm64 -arch arm64e \
+            -dynamiclib \
+            -install_name /var/jb/usr/lib/libroothide.dylib \
+            -miphoneos-version-min=14.0 \
+            -fvisibility=default \
+            -o libroothide.dylib \
+            libroothide.c
+          
+          # Sign with ldid
+          brew install ldid
+          ldid -S libroothide.dylib
+          
+          file libroothide.dylib
+          ls -la libroothide.dylib
 
       - name: Package DEB
         run: |
           mkdir -p pkg/var/jb/usr/lib
-          cp .theos/obj/libroothide.dylib pkg/var/jb/usr/lib/
+          cp libroothide.dylib pkg/var/jb/usr/lib/
           mkdir -p pkg/DEBIAN
-          cat > pkg/DEBIAN/control << 'CTRL'
-          Package: com.fembabe.libroothide-stub
+          echo "Package: com.fembabe.libroothide-stub
           Name: libroothide Stub
           Version: 1.0.0
           Architecture: iphoneos-arm64
           Description: Stub libroothide for Dopamine
           Maintainer: FemBabe
-          Section: System
-          CTRL
+          Section: System" > pkg/DEBIAN/control
           dpkg-deb -Zxz -b pkg libroothide-stub_1.0.0.deb
           ls -la *.deb
 
