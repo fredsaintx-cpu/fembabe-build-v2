@@ -7,6 +7,7 @@
 #include <sys/mman.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <arpa/inet.h>
 
 #define RING_BUFFER_PATH "/var/mobile/Library/Caches/com.fembabe.vcam.ring.bin"
 #define FRAME_SIZE (1920 * 1080 * 4)
@@ -96,7 +97,6 @@ void *handle_client(void *arg) {
         
         if (msg_len > sizeof(buf)) msg_len = sizeof(buf);
         
-        // Read full message with chunk handling
         uint32_t remaining = msg_len;
         uint32_t pos = 0;
         while (remaining > 0) {
@@ -113,7 +113,6 @@ void *handle_client(void *arg) {
         if (msg_type == 1 && msg_len >= 4) {
             chunk_size = (buf[0]<<24)|(buf[1]<<16)|(buf[2]<<8)|buf[3];
         } else if (msg_type == 9 && ring && ring != MAP_FAILED) {
-            // Video frame
             if (msg_len <= FRAME_SIZE) {
                 memcpy(ring->data, buf, msg_len);
                 ring->size = msg_len;
@@ -121,7 +120,6 @@ void *handle_client(void *arg) {
                 ring->write_index++;
             }
         } else if (msg_type == 20 || msg_type == 17) {
-            // AMF command - send minimal response
             uint8_t resp[] = {0x03,0,0,0,0,0,1,20,0,0,0,0,0x05};
             write(fd, resp, sizeof(resp));
         }
@@ -140,10 +138,14 @@ int main() {
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
     
-    // iOS REQUIRES sin_len to be set!
+    // Build sockaddr_in with sin_len for iOS/BSD
+    // On BSD/iOS: struct is {uint8_t sin_len, uint8_t sin_family, uint16_t sin_port, ...}
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
-    addr.sin_len = sizeof(struct sockaddr_in);  // CRITICAL FOR iOS
+    
+    // Set sin_len directly via pointer (first byte of struct)
+    *((uint8_t*)&addr) = sizeof(struct sockaddr_in);
+    
     addr.sin_family = AF_INET;
     addr.sin_port = htons(1935);
     addr.sin_addr.s_addr = INADDR_ANY;
