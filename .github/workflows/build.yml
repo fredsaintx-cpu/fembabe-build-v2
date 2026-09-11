@@ -11,9 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install tools
+        run: brew install ldid dpkg
+
       - name: Build libroothide stub
         run: |
-          # Direct clang compile for iOS
           xcrun -sdk iphoneos clang -arch arm64 -arch arm64e \
             -dynamiclib \
             -install_name /var/jb/usr/lib/libroothide.dylib \
@@ -22,25 +24,15 @@ jobs:
             -o libroothide.dylib \
             libroothide.c
           
-          # Sign with ldid
-          brew install ldid
           ldid -S libroothide.dylib
-          
           file libroothide.dylib
-          ls -la libroothide.dylib
 
       - name: Package DEB
         run: |
           mkdir -p pkg/var/jb/usr/lib
           cp libroothide.dylib pkg/var/jb/usr/lib/
           mkdir -p pkg/DEBIAN
-          echo "Package: com.fembabe.libroothide-stub
-          Name: libroothide Stub
-          Version: 1.0.0
-          Architecture: iphoneos-arm64
-          Description: Stub libroothide for Dopamine
-          Maintainer: FemBabe
-          Section: System" > pkg/DEBIAN/control
+          printf "Package: com.fembabe.libroothide-stub\nName: libroothide Stub\nVersion: 1.0.0\nArchitecture: iphoneos-arm64\nDescription: Stub libroothide for Dopamine\nMaintainer: FemBabe\nSection: System\n" > pkg/DEBIAN/control
           dpkg-deb -Zxz -b pkg libroothide-stub_1.0.0.deb
           ls -la *.deb
 
