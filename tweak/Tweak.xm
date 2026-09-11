@@ -8,32 +8,10 @@ static IMP orig_setTitle = NULL;
 static IMP orig_addSubview = NULL;
 static IMP orig_presentVC = NULL;
 static IMP orig_setRtmp = NULL;
-static IMP orig_setText = NULL;
-static IMP orig_isConnected = NULL;
 static BOOL g_isAuthed = NO;
 static id g_settingsVC = nil;
 
 static void showActivationAlert(void);
-
-// v70: Force isConnected to return YES after auth
-static BOOL hook_isConnected(id self, SEL _cmd) {
-    if (g_isAuthed) {
-        return YES;
-    }
-    if (orig_isConnected) {
-        return ((BOOL(*)(id,SEL))orig_isConnected)(self, _cmd);
-    }
-    return NO;
-}
-
-// v70: Replace "Connecting..." with "Connected" in UILabels
-static void hook_setText(UILabel *self, SEL _cmd, NSString *text) {
-    if (g_isAuthed && text && [text containsString:@"Connecting..."]) {
-        text = [text stringByReplacingOccurrencesOfString:@"Connecting..." withString:@"Connected"];
-        NSLog(@"[FemBabe v70] Forced status: %@", text);
-    }
-    if (orig_setText) ((void(*)(id,SEL,id))orig_setText)(self, _cmd, text);
-}
 
 // Hook setRtmp: to redirect to localhost proxy
 static void hook_setRtmp(id self, SEL _cmd, NSString *rtmpUrl) {
@@ -136,9 +114,8 @@ static void doLogin(NSString *key) {
                 if (data && !e) {
                     NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
                     if ([json[@"ok"] boolValue]) {
-                        NSLog(@"[FemBabe v70] Login success!");
+                        NSLog(@"[FemBabe v71] Login success!");
                         
-                        // Extract session ID from encConfig
                         NSDictionary *encConfig = json[@"encConfig"];
                         if (encConfig[@"ct"]) {
                             NSData *ctData = [[NSData alloc] initWithBase64EncodedString:encConfig[@"ct"] options:0];
@@ -146,7 +123,7 @@ static void doLogin(NSString *key) {
                                 NSDictionary *config = [NSJSONSerialization JSONObjectWithData:ctData options:0 error:nil];
                                 NSString *sid = config[@"sid"];
                                 if (sid) {
-                                    NSLog(@"[FemBabe v70] Got SID: %@", sid);
+                                    NSLog(@"[FemBabe v71] Got SID: %@", sid);
                                     ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setToken:), sid);
                                 }
                             }
@@ -157,19 +134,7 @@ static void doLogin(NSString *key) {
                             ((void(*)(id,SEL,id))objc_msgSend)(api, @selector(setToken:), licenseSig);
                         }
                         
-                        // v70: Set auth flag BEFORE calling loggedin
                         g_isAuthed = YES;
-                        
-                        // v70: Force isConnected on vcam manager
-                        Class vcamMgr = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
-                        if (vcamMgr) {
-                            id mgr = ((id(*)(id,SEL))objc_msgSend)(vcamMgr, @selector(sharedInstance));
-                            if (mgr) {
-                                ((void(*)(id,SEL,BOOL))objc_msgSend)(mgr, @selector(setIsConnected:), YES);
-                                NSLog(@"[FemBabe v70] Forced setIsConnected:YES");
-                            }
-                        }
-                        
                         ((void(*)(id,SEL))objc_msgSend)(g_settingsVC, @selector(loggedin));
                     } else {
                         ((void(*)(id,SEL,id))objc_msgSend)(g_settingsVC, @selector(loginError:), json[@"error"] ?: @"Invalid key");
@@ -197,19 +162,10 @@ static void showActivationAlert(void) {
 }
 
 %ctor {
-    // v70: Hook UILabel setText: to replace Connecting... with Connected
-    Method labelMethod = class_getInstanceMethod([UILabel class], @selector(setText:));
-    if (labelMethod) orig_setText = method_setImplementation(labelMethod, (IMP)hook_setText);
-    
     Class vcamMgr = NSClassFromString(@"ifdsflwoWdasdYfsdfJd");
     if (vcamMgr) {
-        // Hook setRtmp:
         Method m = class_getInstanceMethod(vcamMgr, @selector(setRtmp:));
         if (m) orig_setRtmp = method_setImplementation(m, (IMP)hook_setRtmp);
-        
-        // v70: Hook isConnected to return YES after auth
-        Method connMethod = class_getInstanceMethod(vcamMgr, @selector(isConnected));
-        if (connMethod) orig_isConnected = method_setImplementation(connMethod, (IMP)hook_isConnected);
     }
     
     Method m1 = class_getInstanceMethod([UIButton class], @selector(setTitle:forState:));
