@@ -1,4 +1,4 @@
-name: Build vcam_rtmpd
+name: Build vcam v81
 
 on:
   push:
@@ -12,38 +12,33 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install tools
-        run: brew install ldid dpkg
+        run: brew install ldid
 
-      - name: Build vcam_rtmpd
+      - name: Build vcam_rtmpd daemon
         run: |
-          # Compile for iOS arm64 + arm64e
           xcrun -sdk iphoneos clang -arch arm64 -arch arm64e \
-            -miphoneos-version-min=14.0 \
-            -O2 \
-            -o vcam_rtmpd \
-            vcam_rtmpd.c \
+            -miphoneos-version-min=14.0 -O2 \
+            -o vcam_rtmpd vcam_rtmpd.c \
             -lpthread
           
-          # Sign with entitlements
           cat > ent.plist << 'ENTEOF'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>platform-application</key>
-            <true/>
-            <key>com.apple.private.security.no-sandbox</key>
-            <true/>
-          </dict>
-          </plist>
-          ENTEOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>platform-application</key>
+  <true/>
+  <key>com.apple.private.security.no-sandbox</key>
+  <true/>
+</dict>
+</plist>
+ENTEOF
           
           ldid -Sent.plist vcam_rtmpd
-          
           file vcam_rtmpd
           ls -la vcam_rtmpd
 
-      - name: Upload Artifact
+      - name: Upload daemon
         uses: actions/upload-artifact@v4
         with:
           name: vcam_rtmpd
