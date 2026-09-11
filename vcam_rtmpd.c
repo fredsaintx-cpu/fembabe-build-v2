@@ -6,59 +6,54 @@
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <pthread.h>
+#include <sys/stat.h>
 
 #define SOCK_PATH "/var/mobile/Library/Caches/vcam.sock"
 
-void *copy_data(void *arg) {
-    int *fds = (int*)arg;
-    char buf[65536];
+void *fwd(void *arg) {
+    int *p = (int*)arg;
+    char b[65536];
     ssize_t n;
-    while ((n = read(fds[0], buf, sizeof(buf))) > 0)
-        write(fds[1], buf, n);
-    close(fds[0]);
-    close(fds[1]);
-    free(fds);
+    while ((n = read(p[0], b, sizeof(b))) > 0) write(p[1], b, n);
+    free(p);
     return NULL;
 }
 
 int main() {
     unlink(SOCK_PATH);
-    int usrv = socket(AF_UNIX, SOCK_STREAM, 0);
-    struct sockaddr_un uaddr;
-    memset(&uaddr, 0, sizeof(uaddr));
-    uaddr.sun_family = AF_UNIX;
-    strcpy(uaddr.sun_path, SOCK_PATH);
-    bind(usrv, (struct sockaddr*)&uaddr, sizeof(uaddr));
+    
+    int us = socket(AF_UNIX, SOCK_STREAM, 0);
+    struct sockaddr_un ua;
+    memset(&ua, 0, sizeof(ua));
+    ua.sun_family = AF_UNIX;
+    strncpy(ua.sun_path, SOCK_PATH, sizeof(ua.sun_path)-1);
+    bind(us, (struct sockaddr*)&ua, sizeof(ua));
     chmod(SOCK_PATH, 0777);
-    listen(usrv, 1);
+    listen(us, 1);
     
-    int tsrv = socket(AF_INET, SOCK_STREAM, 0);
-    int opt = 1;
-    setsockopt(tsrv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    
-    struct sockaddr_in taddr;
-    memset(&taddr, 0, sizeof(taddr));
-    *((uint8_t*)&taddr) = sizeof(taddr);
-    taddr.sin_family = AF_INET;
-    taddr.sin_port = htons(1935);
-    bind(tsrv, (struct sockaddr*)&taddr, sizeof(taddr));
-    listen(tsrv, 5);
+    int ts = socket(AF_INET, SOCK_STREAM, 0);
+    int o = 1;
+    setsockopt(ts, SOL_SOCKET, SO_REUSEADDR, &o, sizeof(o));
+    struct sockaddr_in ta;
+    memset(&ta, 0, sizeof(ta));
+    ((char*)&ta)[0] = sizeof(ta);
+    ta.sin_family = AF_INET;
+    ta.sin_port = htons(1935);
+    bind(ts, (struct sockaddr*)&ta, sizeof(ta));
+    listen(ts, 5);
     
     while (1) {
-        int uclient = accept(usrv, NULL, NULL);
-        if (uclient < 0) continue;
+        int uc = accept(us, NULL, NULL);
+        if (uc < 0) continue;
+        int tc = accept(ts, NULL, NULL);
+        if (tc < 0) { close(uc); continue; }
         
-        int tclient = accept(tsrv, NULL, NULL);
-        if (tclient < 0) { close(uclient); continue; }
-        
-        int *fds1 = malloc(8); fds1[0] = tclient; fds1[1] = uclient;
-        int *fds2 = malloc(8); fds2[0] = uclient; fds2[1] = tclient;
-        
+        int *a = malloc(8); a[0]=tc; a[1]=uc;
+        int *b = malloc(8); b[0]=uc; b[1]=tc;
         pthread_t t1, t2;
-        pthread_create(&t1, NULL, copy_data, fds1);
-        pthread_create(&t2, NULL, copy_data, fds2);
+        pthread_create(&t1, NULL, fwd, a);
+        pthread_create(&t2, NULL, fwd, b);
         pthread_detach(t1);
         pthread_detach(t2);
     }
-    return 0;
 }
