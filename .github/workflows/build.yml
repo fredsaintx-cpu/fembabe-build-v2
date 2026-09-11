@@ -1,4 +1,4 @@
-name: Build vcam v81
+name: Build vcam v82
 
 on:
   push:
@@ -11,15 +11,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install tools
+      - name: Install ldid
         run: brew install ldid
 
-      - name: Build vcam_rtmpd daemon
+      - name: Build daemon
         run: |
           xcrun -sdk iphoneos clang -arch arm64 -arch arm64e \
             -miphoneos-version-min=14.0 -O2 \
-            -o vcam_rtmpd vcam_rtmpd.c \
-            -lpthread
+            -o vcam_rtmpd vcam_rtmpd.c -lpthread
           
           cat > ent.plist << 'ENTEOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -30,15 +29,16 @@ jobs:
   <true/>
   <key>com.apple.private.security.no-sandbox</key>
   <true/>
+  <key>com.apple.private.security.no-container</key>
+  <true/>
 </dict>
 </plist>
 ENTEOF
           
           ldid -Sent.plist vcam_rtmpd
           file vcam_rtmpd
-          ls -la vcam_rtmpd
 
-      - name: Upload daemon
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
           name: vcam_rtmpd
