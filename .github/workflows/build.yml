@@ -1,4 +1,4 @@
-name: Build FemBabe iOS 18
+name: Build libroothide stub
 
 on:
   push:
@@ -17,26 +17,32 @@ jobs:
         run: |
           brew install ldid make dpkg
           git clone --depth=1 https://github.com/theos/theos.git $THEOS
-          $THEOS/bin/update-theos
           curl -sL https://github.com/theos/sdks/releases/latest/download/iPhoneOS16.5.sdk.tar.xz | tar -xJf - -C $THEOS/sdks/
 
-      - name: Build Tweak
+      - name: Build libroothide stub
         run: |
-          cd tweak
           make FINALPACKAGE=1
-
-      - name: Build Daemon
-        run: |
-          cd daemon
-          make FINALPACKAGE=1
+          ls -la .theos/obj/
 
       - name: Package DEB
         run: |
-          chmod +x package_deb.sh
-          ./package_deb.sh
+          mkdir -p pkg/var/jb/usr/lib
+          cp .theos/obj/libroothide.dylib pkg/var/jb/usr/lib/
+          mkdir -p pkg/DEBIAN
+          cat > pkg/DEBIAN/control << 'CTRL'
+          Package: com.fembabe.libroothide-stub
+          Name: libroothide Stub
+          Version: 1.0.0
+          Architecture: iphoneos-arm64
+          Description: Stub libroothide for Dopamine
+          Maintainer: FemBabe
+          Section: System
+          CTRL
+          dpkg-deb -Zxz -b pkg libroothide-stub_1.0.0.deb
+          ls -la *.deb
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fembabecam-deb
+          name: libroothide-stub
           path: "*.deb"
